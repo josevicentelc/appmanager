@@ -1,0 +1,25 @@
+repositories:
+  - id: example-repository
+    displayName: Example Repository
+    enabled: true
+    checkout:
+      localPath: C:\path\to\repository
+      branch: main
+    polling:
+      intervalSeconds: 300
+      initialHistory:
+        mode: latest
+        count: 50
+    analysis:
+      include:
+        - "**/*"
+      exclude:
+        - "node_modules/**"
+        - "data/**/*.sqlite"
+        - "data/**/*.sqlite-shm"
+        - "data/**/*.sqlite-wal"
+        - "package-lock.json"
+        - "**/package-lock.json"
+        - "**/*.lock"
+        - "dist/**"
+        - "build/**"

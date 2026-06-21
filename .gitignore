@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+data/
+*.log
+
+# Local application state and machine-specific repository paths.
+config/application.yaml
+config/repositories.yaml
+.dependencygraph/
+
+# Local Git fixture; tests create an isolated repository at runtime.
+fixtures/spike-repo/

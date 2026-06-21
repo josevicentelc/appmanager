@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Briefing ejecutivo</title>
+  <link rel="stylesheet" href="/dashboard.css">
+</head>
+<body>
+  <main class="dashboard-container">
+    <header class="dashboard-header">
+      <div><p class="eyebrow">Engineering Memory</p><h1>Briefing ejecutivo</h1><p id="periodLabel" class="subtitle">Síntesis basada en cambios analizados</p></div>
+      <div class="header-controls">
+        <select id="repositorySelector" aria-label="Repositorio"><option value="">Todos los repositorios</option></select>
+        <select id="periodSelector" aria-label="Periodo"><option value="7">7 días</option><option value="30" selected>30 días</option><option value="90">90 días</option></select>
+        <button id="refreshButton" type="button">Actualizar análisis</button>
+        <button class="secondary" type="button" onclick="window.print()">Exportar PDF</button>
+      </div>
+    </header>
+
+    <section id="loading" class="state-card"><div class="spinner"></div><div><strong>Preparando briefing</strong><p>El modelo está agrupando cambios, riesgos y decisiones.</p></div></section>
+    <section id="error" class="state-card error" hidden></section>
+    <section id="empty" class="state-card" hidden></section>
+
+    <div id="content" hidden>
+      <section class="hero">
+        <div><span id="attentionBadge" class="badge"></span><h2 id="headline"></h2><p id="executiveSummary"></p></div>
+        <div class="coverage"><strong id="coverageCommits">0</strong><span>cambios analizados</span><strong id="coverageRepos">0</strong><span>repositorios con evidencia</span></div>
+      </section>
+
+      <section class="priority-grid">
+        <article class="panel"><div class="panel-heading"><p class="eyebrow">Requiere criterio</p><h3>Decisiones</h3><span id="decisionCount" class="count"></span></div><div id="decisions" class="item-list"></div></article>
+        <article class="panel"><div class="panel-heading"><p class="eyebrow">Exposición</p><h3>Riesgos</h3><span id="riskCount" class="count"></span></div><div id="risks" class="item-list"></div></article>
+      </section>
+
+      <section class="secondary-grid">
+        <article class="panel"><div class="panel-heading"><p class="eyebrow">Valor entregado</p><h3>Logros</h3></div><div id="achievements" class="item-list"></div></article>
+        <article class="panel"><div class="panel-heading"><p class="eyebrow">Seguimiento</p><h3>Señales a vigilar</h3></div><div id="watchItems" class="item-list"></div></article>
+      </section>
+
+      <details class="limitations"><summary>Alcance y limitaciones del análisis</summary><ul id="limitations"></ul></details>
+      <footer>Generado <span id="generatedAt"></span> · <span id="cacheState"></span> · Las conclusiones se basan únicamente en conocimiento extraído de Git.</footer>
+    </div>
+  </main>
+  <script src="/dashboard.js"></script>
+</body>
+</html>

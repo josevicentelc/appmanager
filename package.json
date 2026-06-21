@@ -1,0 +1,37 @@
+{
+  "name": "engineering-memory",
+  "version": "0.1.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/start.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "spike:commit": "tsx src/cli/spike-commit.ts",
+    "ingest:commit": "tsx src/cli/ingest-commit.ts",
+    "ingest:recent": "tsx src/cli/ingest-recent.ts",
+    "chat": "tsx src/cli/chat.ts",
+    "daemon": "tsx src/daemon/main.ts",
+    "server": "tsx src/server/main.ts",
+    "db:summary": "tsx src/cli/db-summary.ts",
+    "health:ai": "tsx src/cli/ai-health.ts",
+    "runtime:spike:commit": "node src/cli/spike-commit.mjs",
+    "runtime:health:ai": "node src/cli/ai-health.mjs"
+  },
+  "dependencies": {
+    "execa": "^9.6.0",
+    "openai": "^5.8.2",
+    "pino": "^9.7.0",
+    "sqlite": "^5.1.1",
+    "sqlite3": "^6.0.1",
+    "yaml": "^2.8.0",
+    "zod": "^3.25.67"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.1",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}
