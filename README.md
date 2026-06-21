@@ -32,7 +32,8 @@ Implemented:
   - diff chunks;
   - commit knowledge;
   - knowledge facts;
-  - source references.
+  - source references;
+  - Git version tags associated with commits.
 - Configured repository ingestion through `config/repositories.yaml`.
 - Monorepo projects with path-scoped analysis and independent logical identities.
 - Git tag discovery and project-specific version patterns.
@@ -56,6 +57,8 @@ Implemented:
   - PDF export capability
 - Local web UI and HTTP API.
 - Audience-aware answers with `Desarrollador` and `Usuario` modes.
+- Git author and committer metadata available to retrieval and model context.
+- Combined work reports by Git author and inclusive date range, grouped by project/repository.
 - Live chat progress events for retrieval, context preparation, and model response generation.
 
 Not implemented yet:
@@ -69,6 +72,7 @@ Not implemented yet:
 - Token-by-token model response streaming.
 - Full web views for commits, jobs, and repositories.
 - Authentication.
+- Pull request metadata such as PR author, description, reviewers, and approvals.
 
 ## Requirements
 
@@ -302,6 +306,8 @@ GET  /api/metrics/dashboard
 GET  /api/metrics/velocity
 GET  /api/metrics/report
 GET  /api/metrics/stability
+GET  /api/employee-reports/authors
+POST /api/employee-reports
 GET  /dashboard
 GET  /dashboard.css
 GET  /dashboard.js
@@ -310,6 +316,67 @@ GET  /dashboard.js
 `POST /api/chat/stream` returns Server-Sent Events for actual processing stages and then the complete result. The web UI uses it to show current work and elapsed time while the user waits.
 
 `GET /api/health` includes live digest daemon state: whether it is running, current repository/commit, timestamps, and indexed/failed counts for the active cycle.
+
+`GET /api/employee-reports/authors` lists exact `author_name` identities with
+digested commits. `POST /api/employee-reports` accepts `from`, `to`, an optional
+`authorNames` array (`null` means all authors in the period), and `language`.
+It generates one evidence-backed LLM report per author and returns them as one
+combined document, with tasks grouped by configured project/repository inside
+each employee section. Git authorship is used for attribution; the report does not
+treat commit volume as a productivity measure.
+
+### Employee work reports
+
+The **Reports** tab includes an employee report form with an inclusive start
+date, end date, and an exact Git author or all authors. Only authors with
+digested commits in currently enabled repositories are offered; stale fixture
+repositories and disabled sources are excluded.
+
+For each employee, evidence is separated by logical project/repository before
+calling the model. This prevents commits from different projects being mixed in
+one task group. The combined document contains:
+
+- an overall employee summary;
+- one section per project/repository;
+- focus areas and grouped tasks for that project;
+- outcomes, confidence, and validated commit evidence;
+- declared limitations and any project block that could not be generated.
+
+The model can only return repository keys and commit hashes included in its
+input JSON Schema. References are validated again after generation. A malformed
+project response is retried once with reduced evidence, while successful
+project and employee sections are preserved.
+
+Example request for all authors in a period:
+
+```powershell
+$body = @{
+  from = "2026-01-01"
+  to = "2026-06-30"
+  authorNames = $null
+  language = "es"
+} | ConvertTo-Json
+
+Invoke-RestMethod -Method Post `
+  -Uri http://127.0.0.1:8080/api/employee-reports `
+  -ContentType "application/json" `
+  -Body $body
+```
+
+Set `authorNames` to an array such as `@("Git Author Name")` to select an
+employee. A request is limited to 366 days and 50 authors. Up to 100 analyzed
+commits are selected per employee with balanced representation across their
+repositories. Reports are generated sequentially to avoid overlapping local
+model calls.
+
+Git attribution has precise semantics:
+
+- `author_name` identifies the person recorded by Git as the author of the work;
+- `committer_name` identifies the person or process that integrated the commit;
+- neither field proves who authored, reviewed, or approved a pull request.
+
+PR descriptions, reviewers, approvals, and formal PR authorship require a
+future provider-specific API integration.
 
 ### Dashboard Ejecutivo (Executive Dashboard)
 
@@ -388,6 +455,8 @@ The system deliberately treats repository content as untrusted:
 - Repository content is not executed.
 - Secrets are redacted before model calls.
 - Model-provided source references are validated against known commit files.
+- Employee-report evidence is restricted to known repository/commit pairs.
+- Employee reports use Git authorship but do not rank people or infer productivity.
 - Answers are instructed to cite repository, commit, file, and line references when available.
 
 Retrieval is still simple. It currently combines lexical matching, fact matching, recency fallback, risk/symptom boosts, and direct commit hash lookup. Embeddings and pgvector are planned but not implemented yet.

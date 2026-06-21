@@ -20,6 +20,8 @@ export interface RetrievedCandidate {
   shortHash: string;
   subject: string;
   committedAt: string;
+  authorName: string;
+  committerName: string;
   summary: string;
   intent: string | null;
   model: string;
@@ -30,6 +32,7 @@ export interface RetrievedCandidate {
     factMatches: number;
     summaryMatches: number;
     subjectMatches: number;
+    authorMatches: number;
   };
   facts: RetrievedFact[];
 }
@@ -47,6 +50,8 @@ export async function retrieveCandidates(
     commit_hash: string;
     subject: string;
     committed_at: string;
+    author_name: string;
+    committer_name: string;
     summary: string;
     intent: string | null;
     model: string;
@@ -60,6 +65,8 @@ export async function retrieveCandidates(
       c.hash AS commit_hash,
       c.subject,
       c.committed_at,
+      c.author_name,
+      c.committer_name,
       ck.summary,
       ck.intent,
       ck.model,
@@ -110,6 +117,8 @@ function scoreRow(
     commit_hash: string;
     subject: string;
     committed_at: string;
+    author_name: string;
+    committer_name: string;
     summary: string;
     intent: string | null;
     model: string;
@@ -123,8 +132,10 @@ function scoreRow(
   const summaryMatches = countMatches(`${row.summary} ${row.intent ?? ""}`, terms);
   const factMatches = countMatches(row.fact_blob ?? "", terms);
   const versionMatches = countMatches(row.version_tags ?? "", terms);
-  const matchedTerms = terms.filter((term) => normalizeText(`${row.subject} ${row.summary} ${row.intent ?? ""} ${row.fact_blob ?? ""} ${row.version_tags ?? ""}`).includes(term));
-  const score = fallbackScore ?? (subjectMatches * 4 + summaryMatches * 3 + factMatches * 2 + versionMatches * 4 + matchedTerms.length);
+  const authorMatches = countMatches(`${row.author_name} ${row.committer_name}`, terms);
+  const searchableText = `${row.subject} ${row.summary} ${row.intent ?? ""} ${row.fact_blob ?? ""} ${row.version_tags ?? ""} ${row.author_name} ${row.committer_name}`;
+  const matchedTerms = terms.filter((term) => normalizeText(searchableText).includes(term));
+  const score = fallbackScore ?? (subjectMatches * 4 + summaryMatches * 3 + factMatches * 2 + versionMatches * 4 + authorMatches * 4 + matchedTerms.length);
 
   return {
     knowledgeId: row.knowledge_id,
@@ -133,6 +144,8 @@ function scoreRow(
     shortHash: row.commit_hash.slice(0, 8),
     subject: row.subject,
     committedAt: row.committed_at,
+    authorName: row.author_name,
+    committerName: row.committer_name,
     summary: row.summary,
     intent: row.intent,
     model: row.model,
@@ -142,7 +155,8 @@ function scoreRow(
       matchedTerms,
       factMatches,
       summaryMatches,
-      subjectMatches
+      subjectMatches,
+      authorMatches
     },
     facts: []
   };
@@ -245,6 +259,8 @@ export function buildInvestigationContext(question: string, candidates: Retrieve
       `Commit: ${candidate.commitHash}`,
       `Versions: ${candidate.versionTags.join(", ") || "none"}`,
       `Date: ${candidate.committedAt}`,
+      `Git author: ${candidate.authorName}`,
+      `Git committer: ${candidate.committerName}`,
       `Subject: ${candidate.subject}`,
       `Summary: ${candidate.summary}`,
       `Intent: ${candidate.intent ?? "unknown"}`,
@@ -267,6 +283,7 @@ export function buildHighLevelContext(question: string, candidates: RetrievedCan
     sections.push([
       `CHANGE ${index + 1}`,
       `Date: ${candidate.committedAt}`,
+      `Git author: ${candidate.authorName}`,
       `Versions: ${candidate.versionTags.join(", ") || "Not specified"}`,
       `Description: ${candidate.summary}`,
       `Purpose: ${candidate.intent ?? "Not specified"}`
@@ -281,6 +298,7 @@ function getSearchTerms(question: string): string[] {
     "para", "pero", "como", "cuando", "donde", "cual", "que", "por", "con", "sin",
     "los", "las", "una", "unos", "unas", "del", "the", "and", "what", "when", "where",
     "commits", "commit", "cambio", "cambios", "toca", "tocan", "sobre", "tiene", "tienen",
+    "quien", "who",
     "cual", "cuál", "fue", "han", "has", "hay", "del", "desde", "hasta", "añadio", "anadio",
     "añadido", "anadido"
   ]);

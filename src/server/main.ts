@@ -9,6 +9,7 @@ import { loadRepositoryConfigs } from "../repositories/repository-config.js";
 import { digestDaemonStatus } from "../daemon/status.js";
 import { isInvestigationAudience } from "../domain/investigation-audience.js";
 import { buildExecutiveBriefing } from "../application/executive-briefing-service.js";
+import { buildEmployeeWorkReports, listEmployeeAuthors, maxAuthorsPerReport, parseReportPeriod } from "../application/employee-work-report-service.js";
 
 export async function startHttpServer(): Promise<Server> {
   const config = await loadConfig();
@@ -248,6 +249,67 @@ async function routeRequest(
     const db = await openEngineeringMemoryDb(config.database.path);
     try {
       sendJson(response, 200, await buildExecutiveBriefing(db, config, { days, repositoryKey, refresh, language }));
+    } finally {
+      await db.close();
+    }
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/employee-reports/authors") {
+    const repositoryKeys = (await loadRepositoryConfigs())
+      .filter((repository) => repository.enabled)
+      .map((repository) => repository.id);
+    const db = await openEngineeringMemoryDb(config.database.path);
+    try {
+      sendJson(response, 200, { authors: await listEmployeeAuthors(db, repositoryKeys) });
+    } finally {
+      await db.close();
+    }
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/employee-reports") {
+    const body = await readJsonBody<{
+      from?: unknown;
+      to?: unknown;
+      authorNames?: unknown;
+      language?: unknown;
+    }>(request);
+    if (typeof body.from !== "string" || typeof body.to !== "string") {
+      sendJson(response, 400, { error: "from y to son obligatorios y deben usar YYYY-MM-DD" });
+      return;
+    }
+    const authorNames = body.authorNames === null || body.authorNames === undefined
+      ? null
+      : Array.isArray(body.authorNames) && body.authorNames.every((name) => typeof name === "string")
+        ? body.authorNames
+        : undefined;
+    if (authorNames === undefined) {
+      sendJson(response, 400, { error: "authorNames debe ser null o una lista de nombres" });
+      return;
+    }
+    try {
+      parseReportPeriod(body.from, body.to);
+    } catch (error) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) });
+      return;
+    }
+    if (authorNames !== null && new Set(authorNames).size > maxAuthorsPerReport) {
+      sendJson(response, 400, { error: `El informe admite un máximo de ${maxAuthorsPerReport} empleados` });
+      return;
+    }
+    const db = await openEngineeringMemoryDb(config.database.path);
+    try {
+      const repositoryKeys = (await loadRepositoryConfigs())
+        .filter((repository) => repository.enabled)
+        .map((repository) => repository.id);
+      sendJson(response, 200, await buildEmployeeWorkReports(db, config, {
+        from: body.from,
+        to: body.to,
+        authorNames,
+        language: body.language === "en" ? "en" : "es",
+        repositoryKeys
+      }));
     } finally {
       await db.close();
     }

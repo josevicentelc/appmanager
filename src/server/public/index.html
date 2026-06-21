@@ -49,6 +49,16 @@
         <div class="reports-grid">
           <div class="report-card"><h3>Briefing semanal</h3><p>Logros, riesgos y decisiones de los últimos 7 días.</p><button onclick="generateWeeklyReport(this)">Generar</button></div>
           <div class="report-card"><h3>Briefing mensual</h3><p>Visión ejecutiva consolidada de los últimos 30 días.</p><button onclick="generateMonthlyReport(this)">Generar</button></div>
+          <div class="report-card employee-report-card">
+            <h3>Informe de trabajo por empleado</h3>
+            <p>Resume las tareas atribuidas al autor Git durante un periodo, sin usar los commits como medida de productividad.</p>
+            <div class="employee-report-filters">
+              <label>Desde<input id="employeeReportFrom" type="date"></label>
+              <label>Hasta<input id="employeeReportTo" type="date"></label>
+              <label>Empleado<select id="employeeReportAuthor"><option value="">Todos los empleados</option></select></label>
+            </div>
+            <button id="employeeReportButton" onclick="generateEmployeeReport(this)">Generar informe conjunto</button>
+          </div>
         </div>
       </div>
     </div>

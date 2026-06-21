@@ -1,5 +1,6 @@
 const state = {
   repositories: [],
+  employeeAuthors: [],
   pending: false
 };
 
@@ -49,6 +50,100 @@ async function generateWeeklyReport(button) {
 
 async function generateMonthlyReport(button) {
   await generateExecutiveReport(30, button);
+}
+
+async function loadEmployeeAuthors() {
+  const select = document.querySelector("#employeeReportAuthor");
+  if (!select) return;
+  const data = await fetchJson("/api/employee-reports/authors");
+  state.employeeAuthors = data.authors || [];
+  select.innerHTML = `<option value="">Todos los empleados</option>${state.employeeAuthors.map((author) =>
+    `<option value="${escapeHtml(author.authorName)}">${escapeHtml(author.authorName)}</option>`).join("")}`;
+}
+
+async function generateEmployeeReport(button) {
+  const from = document.querySelector("#employeeReportFrom")?.value;
+  const to = document.querySelector("#employeeReportTo")?.value;
+  const authorName = document.querySelector("#employeeReportAuthor")?.value || "";
+  const language = document.querySelector("#reportLanguage")?.value === "en" ? "en" : "es";
+  if (!from || !to) {
+    alert("Selecciona las fechas inicial y final.");
+    return;
+  }
+  const startedAt = Date.now();
+  button.disabled = true;
+  button.classList.add("generating");
+  button.innerHTML = `<span class="button-spinner" aria-hidden="true"></span><span data-label>Generando informes · 0 s</span>`;
+  const timer = setInterval(() => {
+    const label = button.querySelector("[data-label]");
+    if (label) label.textContent = `Generando informes · ${Math.floor((Date.now() - startedAt) / 1000)} s`;
+  }, 1000);
+  try {
+    const data = await fetchJson("/api/employee-reports", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ from, to, authorNames: authorName ? [authorName] : null, language })
+    });
+    showEmployeeReportModal(data, language);
+  } catch (error) {
+    alert(`No se pudo generar el informe: ${error.message}`);
+  } finally {
+    clearInterval(timer);
+    button.disabled = false;
+    button.classList.remove("generating");
+    button.textContent = "Generar informe conjunto";
+  }
+}
+
+function showEmployeeReportModal(data, language) {
+  const title = language === "en" ? "Employee work report" : "Informe de trabajo por empleado";
+  const modal = document.createElement("div");
+  modal.className = "report-modal";
+  const documentNode = document.createElement("div");
+  documentNode.className = "report-document";
+  documentNode.innerHTML = `
+    <header class="report-document-header"><div><span>Engineering Memory</span><h2>${title}</h2></div><button type="button" data-close>Cerrar</button></header>
+    <section class="report-summary"><h3>${escapeHtml(data.period.from)} - ${escapeHtml(data.period.to)}</h3><p>${data.reports.length} ${data.reports.length === 1 ? "empleado" : "empleados"} con evidencia analizada.</p></section>
+    ${data.reports.length ? data.reports.map(renderEmployeeReport).join("") : '<p class="report-empty">No hay tareas digeridas para la selección.</p>'}
+    ${data.emptyAuthors?.length ? `<section class="report-section report-limitations"><h3>Sin evidencia en el periodo</h3><p>${escapeHtml(data.emptyAuthors.join(", "))}</p></section>` : ""}
+    ${data.failedAuthors?.length ? `<section class="report-section report-limitations"><h3>Informes no generados</h3>${data.failedAuthors.map((item) => `<p><strong>${escapeHtml(item.authorName)}:</strong> ${escapeHtml(item.error)}</p>`).join("")}</section>` : ""}
+    <p class="report-generated">Generado ${escapeHtml(new Date(data.generatedAt).toLocaleString(language === "en" ? "en-GB" : "es-ES"))}. La autoría corresponde a author_name de Git y no mide productividad.</p>
+    <footer class="report-actions"><button type="button" data-download>Descargar texto</button><button type="button" data-print>Imprimir / PDF</button></footer>`;
+  modal.appendChild(documentNode);
+  document.body.appendChild(modal);
+  documentNode.querySelector("[data-close]").addEventListener("click", () => modal.remove());
+  documentNode.querySelector("[data-download]").addEventListener("click", () => downloadReport(title, formatEmployeeReportAsText(data)));
+  documentNode.querySelector("[data-print]").addEventListener("click", () => window.print());
+  modal.addEventListener("click", (event) => { if (event.target === modal) modal.remove(); });
+}
+
+function renderEmployeeReport(item) {
+  const report = item.report;
+  return `<section class="employee-report">
+    <h3>${escapeHtml(item.authorName)}</h3>
+    <div class="report-coverage">${item.evidenceCommits} ${item.evidenceCommits === 1 ? "cambio" : "cambios"} con conocimiento analizado${item.evidenceTruncated ? " · evidencia limitada a los 100 más recientes" : ""}</div>
+    <p>${escapeHtml(report.summary)}</p>
+    ${report.repositories.map((repository) => `<section class="employee-repository"><h4>${escapeHtml(employeeRepositoryLabel(repository.repositoryKey))}</h4><p>${escapeHtml(repository.summary)}</p><div class="employee-focus-areas">${repository.focusAreas.map((area) => `<span>${escapeHtml(area)}</span>`).join("")}</div>${repository.tasks.map((task) => `<article class="report-item"><h5>${escapeHtml(task.title)}</h5><p>${escapeHtml(task.description)}</p><p><strong>Resultado:</strong> ${escapeHtml(task.outcome)}</p><details><summary>Evidencia y confianza (${Math.round(task.confidence * 100)}%)</summary>${task.evidence.map((evidence) => `<div class="report-evidence"><code>${escapeHtml(evidence.repositoryKey)} · ${escapeHtml(evidence.commitHash.slice(0, 8))}</code><span>${escapeHtml(evidence.reason)}</span></div>`).join("")}</details></article>`).join("")}</section>`).join("")}
+    ${report.limitations.length ? `<details class="report-limitations"><summary>Limitaciones</summary><ul>${report.limitations.map((limitation) => `<li>${escapeHtml(limitation)}</li>`).join("")}</ul></details>` : ""}
+  </section>`;
+}
+
+function employeeRepositoryLabel(repositoryKey) {
+  const repository = state.repositories.find((candidate) => candidate.id === repositoryKey);
+  return repository ? `${repository.displayName} (${repositoryKey})` : repositoryKey;
+}
+
+function formatEmployeeReportAsText(data) {
+  return [
+    "INFORME DE TRABAJO POR EMPLEADO",
+    `Periodo: ${data.period.from} - ${data.period.to}`,
+    ...data.reports.map((item) => [
+      item.authorName.toUpperCase(),
+      item.report.summary,
+      ...item.report.repositories.map((repository) => [`PROYECTO/REPOSITORIO: ${repository.repositoryKey}`, repository.summary, `Áreas: ${repository.focusAreas.join(", ")}`, ...repository.tasks.map((task) => `- ${task.title}\n  ${task.description}\n  Resultado: ${task.outcome}\n  Evidencia: ${task.evidence.map((entry) => `${entry.repositoryKey}/${entry.commitHash.slice(0, 8)}`).join(", ")}`)].join("\n\n")),
+      ...item.report.limitations.map((limitation) => `Limitación: ${limitation}`)
+    ].join("\n\n"))
+  ].join("\n\n");
 }
 
 async function generateExecutiveReport(days, button) {
@@ -233,7 +328,8 @@ function reportLabels(language) {
 async function boot() {
   const [health, repositories] = await Promise.all([
     fetchJson("/api/health"),
-    fetchJson("/api/repositories")
+    fetchJson("/api/repositories"),
+    loadEmployeeAuthors()
   ]);
 
   state.repositories = repositories.repositories;
@@ -245,6 +341,11 @@ async function boot() {
     ? health.digestDaemon.running ? "digest activo" : "digest esperando"
     : "digest inactivo";
   statusText.textContent = `${health.model} · ${digest}`;
+
+  const today = new Date();
+  const from = new Date(today.getTime() - 29 * 86_400_000);
+  document.querySelector("#employeeReportTo").value = today.toISOString().slice(0, 10);
+  document.querySelector("#employeeReportFrom").value = from.toISOString().slice(0, 10);
 }
 
 questionInput.addEventListener("keydown", (event) => {
@@ -320,6 +421,7 @@ function renderCandidates(candidates, audience) {
         <code>${escapeHtml(candidate.shortHash)}</code>
         ${candidate.versionTags?.length ? `<code>${escapeHtml(candidate.versionTags.join(", "))}</code>` : ""}
         ${escapeHtml(candidate.subject)}
+        <div>Autor Git: ${escapeHtml(candidate.authorName)}</div>
         <div>${escapeHtml(candidate.summary)}</div>
       </div>`
   ).join("");
