@@ -131,6 +131,25 @@ repositories:
 
 The config excludes noisy/generated files before sending diffs to the model, including `node_modules`, build output, lockfiles, and SQLite data/WAL/SHM files.
 
+### Synchronization window
+
+For a large repository, use a date cutoff so the first ingestion does not walk
+its entire history. `count` is optional, but combining it with `since` provides
+an additional upper bound:
+
+```yaml
+polling:
+  intervalSeconds: 300
+  initialHistory:
+    mode: since
+    since: "2026-01-01"
+    count: 500
+```
+
+Only commits on or after the ISO date are candidates, with at most 500 commits
+per configured repository or monorepo project. Already processed commits are
+skipped without calling the AI model. To use a date only, omit `count`.
+
 ### Monorepos and version tags
 
 A physical repository can expose several independently searchable projects. A
@@ -205,6 +224,13 @@ Analyze and persist recent commits:
 
 ```powershell
 npm run ingest:recent -- --repository example-repository --count 5
+```
+
+Analyze commits from a date, optionally with an absolute limit:
+
+```powershell
+npm run ingest:recent -- --repository example-repository --since 2026-01-01
+npm run ingest:recent -- --repository example-repository --since 2026-01-01 --count 500
 ```
 
 Show database contents:

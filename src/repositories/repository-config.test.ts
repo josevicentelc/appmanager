@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadRepositoryConfigs } from "./repository-config.js";
+import { isValidHistoryDate, loadRepositoryConfigs } from "./repository-config.js";
 
 describe("loadRepositoryConfigs", () => {
   let temporaryDirectory: string | null = null;
@@ -24,6 +24,11 @@ repositories:
     checkout:
       localPath: C:\\repos\\platform
       branch: main
+    polling:
+      initialHistory:
+        mode: since
+        since: "2026-01-01"
+        count: 500
     analysis:
       exclude:
         - "**/generated/**"
@@ -53,5 +58,33 @@ repositories:
     expect(repositories[1]?.analysis.include).toEqual(["apps/web/**/*"]);
     expect(repositories[1]?.projectRoot).toBe("apps/web");
     expect(repositories[1]?.versioning.tags.include).toEqual(["**"]);
+    expect(repositories[0]?.polling.initialHistory).toEqual({
+      mode: "since",
+      since: "2026-01-01",
+      count: 500
+    });
+  });
+
+  it("rejects a since history window without a valid date", async () => {
+    temporaryDirectory = await mkdtemp(join(tmpdir(), "engineering-memory-config-"));
+    const configPath = join(temporaryDirectory, "repositories.yaml");
+    await writeFile(configPath, `
+repositories:
+  - id: invalid
+    displayName: Invalid
+    checkout:
+      localPath: C:\\repos\\invalid
+      branch: main
+    polling:
+      initialHistory:
+        mode: since
+`, "utf8");
+
+    await expect(loadRepositoryConfigs(configPath)).rejects.toThrow(
+      "since is required when initialHistory.mode is 'since'"
+    );
+    expect(isValidHistoryDate("2026-01-01")).toBe(true);
+    expect(isValidHistoryDate("2026-02-30")).toBe(false);
+    expect(isValidHistoryDate("last month")).toBe(false);
   });
 });

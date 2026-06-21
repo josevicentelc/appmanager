@@ -23,6 +23,31 @@ const projectSchema = z.object({
   versioning: versioningSchema.optional()
 });
 
+const historyWindowSchema = z.object({
+  mode: z.enum(["latest", "since"]).default("latest"),
+  count: z.number().int().positive().optional(),
+  since: z.string().optional()
+}).superRefine((history, context) => {
+  if (history.mode !== "since") {
+    return;
+  }
+  if (history.since === undefined || history.since.trim() === "") {
+    context.addIssue({
+      code: "custom",
+      path: ["since"],
+      message: "since is required when initialHistory.mode is 'since'"
+    });
+    return;
+  }
+  if (!isValidHistoryDate(history.since)) {
+    context.addIssue({
+      code: "custom",
+      path: ["since"],
+      message: "since must be an ISO date or timestamp, for example 2026-01-01"
+    });
+  }
+});
+
 const configuredRepositorySchema = z.object({
   id: z.string().min(1),
   displayName: z.string().min(1),
@@ -33,11 +58,7 @@ const configuredRepositorySchema = z.object({
   }),
   polling: z.object({
     intervalSeconds: z.number().int().positive().default(300),
-    initialHistory: z.object({
-      mode: z.enum(["latest", "since"]).default("latest"),
-      count: z.number().int().positive().optional(),
-      since: z.string().optional()
-    }).default({ mode: "latest", count: 50 })
+    initialHistory: historyWindowSchema.default({ mode: "latest", count: 50 })
   }).default({
     intervalSeconds: 300,
     initialHistory: { mode: "latest", count: 50 }
@@ -148,4 +169,16 @@ function scopePattern(rootPath: string, pattern: string): string {
   const root = normalizeRoot(rootPath);
   const normalizedPattern = pattern.replace(/\\/g, "/").replace(/^\/+/, "");
   return root === "" || root === "." ? normalizedPattern : `${root}/${normalizedPattern}`;
+}
+
+export function isValidHistoryDate(value: string): boolean {
+  const trimmed = value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}(?:T.*)?$/.test(trimmed)) {
+    return false;
+  }
+  const timestamp = Date.parse(trimmed);
+  if (Number.isNaN(timestamp)) {
+    return false;
+  }
+  return trimmed.includes("T") || new Date(timestamp).toISOString().slice(0, 10) === trimmed;
 }

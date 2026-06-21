@@ -2,15 +2,16 @@ import { loadConfig } from "../config.js";
 import { openEngineeringMemoryDb } from "../db/database.js";
 import { isCommitProcessed } from "../db/knowledge-queries.js";
 import { syncCommitVersionTags } from "../db/commit-store.js";
-import { listRecentCommits, resolveCommit } from "../git/git-client.js";
+import { listCommitsNewestFirst, resolveCommit } from "../git/git-client.js";
 import { ingestCommit, ingestOptionsFromRepository, readRepositoryVersionTags } from "../application/ingest-service.js";
-import { getEnabledRepository, loadRepositoryConfigs } from "../repositories/repository-config.js";
+import { getEnabledRepository, isValidHistoryDate, loadRepositoryConfigs } from "../repositories/repository-config.js";
 import { hasFlag, readFlag } from "./args.js";
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const requestedRepositoryId = readFlag(args, "repository") ?? readFlag(args, "repo");
   const countFlag = readFlag(args, "count");
+  const sinceFlag = readFlag(args, "since");
   const configPath = readFlag(args, "config") ?? "config/application.yaml";
   const repositoriesPath = readFlag(args, "repositories") ?? "config/repositories.yaml";
   const dryRun = hasFlag(args, "dry-run");
@@ -23,21 +24,31 @@ async function main(): Promise<void> {
     throw new Error("No enabled repository or monorepo project is configured");
   }
   const repository = getEnabledRepository(repositories, repositoryId);
-  const count = countFlag === null
-    ? repository.polling.initialHistory.count ?? 50
-    : Number(countFlag);
+  const history = repository.polling.initialHistory;
+  const since = sinceFlag ?? (history.mode === "since" ? history.since : undefined);
+  const count = countFlag !== null
+    ? Number(countFlag)
+    : sinceFlag !== null
+      ? undefined
+      : history.count ?? (since === undefined ? 50 : undefined);
 
-  if (!Number.isInteger(count) || count <= 0) {
+  if (count !== undefined && (!Number.isInteger(count) || count <= 0)) {
     throw new Error("--count must be a positive integer");
+  }
+  if (since !== undefined && !isValidHistoryDate(since)) {
+    throw new Error("--since must be an ISO date or timestamp, for example 2026-01-01");
   }
 
   const branchHead = await resolveCommit(repository.checkout.localPath, repository.checkout.branch);
-  const commits = await listRecentCommits(
+  const commits = (await listCommitsNewestFirst(
     repository.checkout.localPath,
     repository.checkout.branch,
-    count,
-    repository.projectRoot === null ? [] : [repository.projectRoot]
-  );
+    {
+      ...(count === undefined ? {} : { count }),
+      ...(since === undefined ? {} : { since }),
+      ...(repository.projectRoot === null ? {} : { paths: [repository.projectRoot] })
+    }
+  )).reverse();
   const db = await openEngineeringMemoryDb(config.database.path);
   const results: Array<Record<string, unknown>> = [];
 
@@ -89,7 +100,8 @@ async function main(): Promise<void> {
       repository: repository.id,
       branch: repository.checkout.branch,
       branchHead,
-      count,
+      count: count ?? null,
+      since: since ?? null,
       dryRun,
       reanalyze,
       results
