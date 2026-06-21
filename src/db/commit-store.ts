@@ -9,6 +9,7 @@ export interface StoreCommitAnalysisInput {
   snapshot: CommitSnapshot;
   analysis: CommitAnalysis;
   model: string;
+  versionTags: string[];
 }
 
 export interface StoredCommitAnalysis {
@@ -24,11 +25,29 @@ export interface StoreIgnoredCommitInput {
   repositoryDisplayName: string;
   snapshot: CommitSnapshot;
   reason: string;
+  versionTags: string[];
 }
 
 export interface StoredIgnoredCommit {
   repositoryId: number;
   commitId: number;
+}
+
+export async function syncCommitVersionTags(
+  db: EngineeringMemoryDb,
+  repositoryKey: string,
+  commitHash: string,
+  versionTags: string[]
+): Promise<void> {
+  const row = await db.get<{ id: number }>(
+    `SELECT c.id FROM commits c JOIN repositories r ON r.id = c.repository_id
+     WHERE r.key = ? AND c.hash = ?`,
+    repositoryKey,
+    commitHash
+  );
+  if (row !== undefined) {
+    await replaceCommitVersions(db, row.id, versionTags);
+  }
 }
 
 export async function storeCommitAnalysis(
@@ -44,6 +63,7 @@ export async function storeCommitAnalysis(
       input.snapshot.repositoryPath
     );
     const commitId = await upsertCommit(db, repositoryId, input.snapshot, "indexed");
+    await replaceCommitVersions(db, commitId, input.versionTags);
     const sourceKeyToChunkId = await replaceCommitFilesAndChunks(db, commitId, input.snapshot);
     const knowledgeId = await replaceCommitKnowledge(db, commitId, input);
     const factCount = await replaceKnowledgeFacts(db, knowledgeId, input.analysis, sourceKeyToChunkId);
@@ -69,11 +89,27 @@ export async function storeIgnoredCommit(
       input.snapshot.repositoryPath
     );
     const commitId = await upsertCommit(db, repositoryId, input.snapshot, "ignored", input.reason);
+    await replaceCommitVersions(db, commitId, input.versionTags);
     await db.exec("COMMIT;");
     return { repositoryId, commitId };
   } catch (error) {
     await db.exec("ROLLBACK;");
     throw error;
+  }
+}
+
+async function replaceCommitVersions(
+  db: EngineeringMemoryDb,
+  commitId: number,
+  versionTags: string[]
+): Promise<void> {
+  await db.run("DELETE FROM commit_versions WHERE commit_id = ?", commitId);
+  for (const tag of [...new Set(versionTags)].sort()) {
+    await db.run(
+      "INSERT INTO commit_versions (commit_id, tag) VALUES (?, ?)",
+      commitId,
+      tag
+    );
   }
 }
 

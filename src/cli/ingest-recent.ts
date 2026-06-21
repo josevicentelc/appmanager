@@ -1,14 +1,15 @@
 import { loadConfig } from "../config.js";
 import { openEngineeringMemoryDb } from "../db/database.js";
 import { isCommitProcessed } from "../db/knowledge-queries.js";
+import { syncCommitVersionTags } from "../db/commit-store.js";
 import { listRecentCommits, resolveCommit } from "../git/git-client.js";
-import { ingestCommit, ingestOptionsFromRepository } from "../application/ingest-service.js";
+import { ingestCommit, ingestOptionsFromRepository, readRepositoryVersionTags } from "../application/ingest-service.js";
 import { getEnabledRepository, loadRepositoryConfigs } from "../repositories/repository-config.js";
 import { hasFlag, readFlag } from "./args.js";
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
-  const repositoryId = readFlag(args, "repository") ?? readFlag(args, "repo") ?? "aurora";
+  const requestedRepositoryId = readFlag(args, "repository") ?? readFlag(args, "repo");
   const countFlag = readFlag(args, "count");
   const configPath = readFlag(args, "config") ?? "config/application.yaml";
   const repositoriesPath = readFlag(args, "repositories") ?? "config/repositories.yaml";
@@ -17,6 +18,10 @@ async function main(): Promise<void> {
 
   const config = await loadConfig(configPath);
   const repositories = await loadRepositoryConfigs(repositoriesPath);
+  const repositoryId = requestedRepositoryId ?? repositories.find((candidate) => candidate.enabled)?.id;
+  if (repositoryId === undefined) {
+    throw new Error("No enabled repository or monorepo project is configured");
+  }
   const repository = getEnabledRepository(repositories, repositoryId);
   const count = countFlag === null
     ? repository.polling.initialHistory.count ?? 50
@@ -27,7 +32,12 @@ async function main(): Promise<void> {
   }
 
   const branchHead = await resolveCommit(repository.checkout.localPath, repository.checkout.branch);
-  const commits = await listRecentCommits(repository.checkout.localPath, repository.checkout.branch, count);
+  const commits = await listRecentCommits(
+    repository.checkout.localPath,
+    repository.checkout.branch,
+    count,
+    repository.projectRoot === null ? [] : [repository.projectRoot]
+  );
   const db = await openEngineeringMemoryDb(config.database.path);
   const results: Array<Record<string, unknown>> = [];
 
@@ -35,7 +45,11 @@ async function main(): Promise<void> {
     for (const commitHash of commits) {
       const alreadyProcessed = await isCommitProcessed(db, repository.id, commitHash, config.ai.chatModel);
       if (alreadyProcessed && !reanalyze) {
-        results.push({ commitHash, status: "skipped_already_processed" });
+        const versionTags = await readRepositoryVersionTags(repository, commitHash);
+        if (!dryRun) {
+          await syncCommitVersionTags(db, repository.id, commitHash, versionTags);
+        }
+        results.push({ commitHash, status: "skipped_already_processed", versionTags });
         continue;
       }
 

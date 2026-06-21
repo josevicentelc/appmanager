@@ -23,3 +23,42 @@ repositories:
         - "**/*.lock"
         - "dist/**"
         - "build/**"
+
+  # A monorepo is expanded into logical ids such as platform/api and
+  # platform/web. Project analysis patterns are relative to rootPath.
+  - id: platform
+    displayName: Platform Monorepo
+    enabled: false
+    checkout:
+      localPath: C:\path\to\monorepo
+      branch: main
+    polling:
+      intervalSeconds: 300
+      initialHistory:
+        mode: latest
+        count: 50
+    analysis:
+      exclude:
+        - "**/node_modules/**"
+        - "**/dist/**"
+    projects:
+      - id: api
+        displayName: API
+        rootPath: services/api
+        analysis:
+          include:
+            - "**/*"
+        versioning:
+          tags:
+            include:
+              - "api-v*"
+      - id: web
+        displayName: Web Application
+        rootPath: apps/web
+        analysis:
+          include:
+            - "**/*"
+        versioning:
+          tags:
+            include:
+              - "web-v*"

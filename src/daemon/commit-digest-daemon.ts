@@ -1,8 +1,9 @@
 import type { AppConfig } from "../config.js";
 import { openEngineeringMemoryDb, type EngineeringMemoryDb } from "../db/database.js";
 import { isCommitProcessed } from "../db/knowledge-queries.js";
+import { syncCommitVersionTags } from "../db/commit-store.js";
 import { listCommitsNewestFirst, resolveCommit } from "../git/git-client.js";
-import { ingestCommit, ingestOptionsFromRepository } from "../application/ingest-service.js";
+import { ingestCommit, ingestOptionsFromRepository, readRepositoryVersionTags } from "../application/ingest-service.js";
 import type { RepositoryConfig } from "../repositories/repository-config.js";
 import { digestDaemonStatus } from "./status.js";
 
@@ -111,7 +112,8 @@ export class CommitDigestDaemon {
     const history = repository.polling.initialHistory;
     const commits = await listCommitsNewestFirst(repository.checkout.localPath, repository.checkout.branch, {
       ...(history.count === undefined ? {} : { count: history.count }),
-      ...(history.mode === "since" && history.since !== undefined ? { since: history.since } : {})
+      ...(history.mode === "since" && history.since !== undefined ? { since: history.since } : {}),
+      ...(repository.projectRoot === null ? {} : { paths: [repository.projectRoot] })
     });
     const branchHead = await resolveCommit(repository.checkout.localPath, repository.checkout.branch);
     console.log(`[digest] ${repository.id}/${repository.checkout.branch} head=${branchHead.slice(0, 8)} candidates=${commits.length}`);
@@ -123,6 +125,12 @@ export class CommitDigestDaemon {
       digestDaemonStatus.currentCommit = commitHash;
       const processed = await isCommitProcessed(db, repository.id, commitHash, this.#config.ai.chatModel);
       if (processed) {
+        await syncCommitVersionTags(
+          db,
+          repository.id,
+          commitHash,
+          await readRepositoryVersionTags(repository, commitHash)
+        );
         continue;
       }
 

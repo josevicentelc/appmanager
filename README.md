@@ -34,6 +34,8 @@ Implemented:
   - knowledge facts;
   - source references.
 - Configured repository ingestion through `config/repositories.yaml`.
+- Monorepo projects with path-scoped analysis and independent logical identities.
+- Git tag discovery and project-specific version patterns.
 - Recent commit ingestion with idempotent skipping of already indexed commits.
 - Periodic commit digest daemon for configured local repositories.
 - Global digestion lock to prevent overlapping LM Studio analysis cycles.
@@ -128,6 +130,44 @@ repositories:
 ```
 
 The config excludes noisy/generated files before sending diffs to the model, including `node_modules`, build output, lockfiles, and SQLite data/WAL/SHM files.
+
+### Monorepos and version tags
+
+A physical repository can expose several independently searchable projects. A
+project id is expanded as `<repository-id>/<project-id>`, its analysis patterns
+are relative to `rootPath`, and the repository-level exclusions still apply:
+
+```yaml
+repositories:
+  - id: platform
+    displayName: Platform Monorepo
+    checkout:
+      localPath: C:\path\to\monorepo
+      branch: main
+    analysis:
+      exclude: ["**/node_modules/**", "**/dist/**"]
+    projects:
+      - id: api
+        displayName: API
+        rootPath: services/api
+        analysis:
+          include: ["**/*"]
+        versioning:
+          tags:
+            include: ["api-v*"]
+      - id: web
+        displayName: Web Application
+        rootPath: apps/web
+        versioning:
+          tags:
+            include: ["web-v*"]
+```
+
+For this example, use `platform/api` or `platform/web` as the repository key in
+the CLI and web API. Lightweight and annotated tags are both supported. Tags
+that point at an indexed commit are stored as versions and can be found in
+questions and included model context. Adding a tag later does not force a new
+AI analysis; the daemon synchronizes its version metadata independently.
 
 ## Commands
 

@@ -45,18 +45,28 @@ export async function resolveCommit(repositoryPath: string, commitish: string): 
   return result.stdout.trim();
 }
 
+export async function listTagsPointingAt(repositoryPath: string, commitish: string): Promise<string[]> {
+  const result = await git(repositoryPath, ["tag", "--points-at", `${commitish}^{commit}`]);
+  return result.stdout
+    .split(/\r?\n/)
+    .map((tag) => tag.trim())
+    .filter((tag) => tag.length > 0)
+    .sort();
+}
+
 export async function listRecentCommits(
   repositoryPath: string,
   branch: string,
-  count: number
+  count: number,
+  paths: string[] = []
 ): Promise<string[]> {
-  return (await listCommitsNewestFirst(repositoryPath, branch, { count })).reverse();
+  return (await listCommitsNewestFirst(repositoryPath, branch, { count, paths })).reverse();
 }
 
 export async function listCommitsNewestFirst(
   repositoryPath: string,
   branch: string,
-  options: { count?: number; since?: string }
+  options: { count?: number; since?: string; paths?: string[] }
 ): Promise<string[]> {
   await assertGitRepository(repositoryPath);
   const args = ["log", "--format=%H"];
@@ -67,6 +77,9 @@ export async function listCommitsNewestFirst(
     args.push(`--since=${options.since}`);
   }
   args.push(branch);
+  if (options.paths !== undefined && options.paths.length > 0) {
+    args.push("--", ...options.paths);
+  }
   const result = await git(repositoryPath, args);
   return result.stdout
     .split(/\r?\n/)

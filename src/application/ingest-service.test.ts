@@ -33,6 +33,8 @@ describe("ingestCommit", () => {
     await writeFile(join(repositoryPath, "fixture.txt"), "fixture\n", "utf8");
     await execa("git", ["-C", repositoryPath, "add", "fixture.txt"]);
     await execa("git", ["-C", repositoryPath, "commit", "-m", "Add fixture"]);
+    await execa("git", ["-C", repositoryPath, "tag", "service-v1.0.0"]);
+    await execa("git", ["-C", repositoryPath, "tag", "-a", "service/v1.0.0", "-m", "Release"]);
     const config: AppConfig = {
       ai: {
         baseUrl: "http://127.0.0.1:1234/v1",
@@ -55,7 +57,8 @@ describe("ingestCommit", () => {
       filter: {
         include: ["**/*"],
         exclude: ["**/*"]
-      }
+      },
+      versionTags: { include: ["service**"], exclude: [] }
     });
 
     expect(result.status).toBe("ignored");
@@ -71,5 +74,11 @@ describe("ingestCommit", () => {
       result.commitHash
     );
     expect(stored?.status).toBe("ignored");
+    expect(result.versionTags).toEqual(["service-v1.0.0", "service/v1.0.0"]);
+    const versions = await db.all<Array<{ tag: string }>>(
+      "SELECT tag FROM commit_versions WHERE commit_id = ?",
+      result.stored.commitId
+    );
+    expect(versions.map((version) => version.tag)).toEqual(["service-v1.0.0", "service/v1.0.0"]);
   });
 });

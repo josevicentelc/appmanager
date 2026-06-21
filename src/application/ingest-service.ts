@@ -2,8 +2,8 @@ import { basename, resolve } from "node:path";
 import type { AppConfig } from "../config.js";
 import { OpenAiCompatibleProvider } from "../ai/openai-compatible-provider.js";
 import type { RepositoryConfig } from "../repositories/repository-config.js";
-import { readCommitSnapshot } from "../git/git-client.js";
-import { filterCommitSnapshot } from "../analysis/filter-snapshot.js";
+import { listTagsPointingAt, readCommitSnapshot } from "../git/git-client.js";
+import { filterCommitSnapshot, globMatches } from "../analysis/filter-snapshot.js";
 import { redactSecrets } from "../security/redact-secrets.js";
 import {
   storeCommitAnalysis,
@@ -22,6 +22,10 @@ export interface IngestCommitOptions {
     include: string[];
     exclude: string[];
   };
+  versionTags?: {
+    include: string[];
+    exclude: string[];
+  };
 }
 
 export interface IndexedCommitResult {
@@ -30,6 +34,7 @@ export interface IndexedCommitResult {
   subject: string;
   summary: string;
   ignoredFiles: string[];
+  versionTags: string[];
   stored: StoredCommitAnalysis;
 }
 
@@ -39,6 +44,7 @@ export interface IgnoredCommitResult {
   subject: string;
   reason: string;
   ignoredFiles: string[];
+  versionTags: string[];
   stored: StoredIgnoredCommit;
 }
 
@@ -57,6 +63,10 @@ export async function ingestCommit(
   );
   const repositoryKey = options.repositoryKey ?? basename(resolve(options.repositoryPath));
   const repositoryDisplayName = options.repositoryDisplayName ?? repositoryKey;
+  const versionTags = filterVersionTags(
+    await listTagsPointingAt(options.repositoryPath, snapshot.metadata.hash),
+    options.versionTags ?? { include: ["**"], exclude: [] }
+  );
 
   if (filtered.snapshot.files.length === 0 || filtered.snapshot.diff.trim() === "") {
     const reason = filtered.snapshot.files.length === 0
@@ -66,7 +76,8 @@ export async function ingestCommit(
       repositoryKey,
       repositoryDisplayName,
       snapshot,
-      reason
+      reason,
+      versionTags
     });
     return {
       status: "ignored",
@@ -74,6 +85,7 @@ export async function ingestCommit(
       subject: snapshot.metadata.subject,
       reason,
       ignoredFiles: filtered.ignoredFiles.map((file) => file.path),
+      versionTags,
       stored
     };
   }
@@ -96,7 +108,8 @@ export async function ingestCommit(
     repositoryDisplayName,
     snapshot: filtered.snapshot,
     analysis,
-    model: config.ai.chatModel
+    model: config.ai.chatModel,
+    versionTags
   });
 
   return {
@@ -105,6 +118,7 @@ export async function ingestCommit(
     subject: filtered.snapshot.metadata.subject,
     summary: analysis.summary,
     ignoredFiles: filtered.ignoredFiles.map((file) => file.path),
+    versionTags,
     stored
   };
 }
@@ -118,6 +132,28 @@ export function ingestOptionsFromRepository(
     commitish,
     repositoryKey: repository.id,
     repositoryDisplayName: repository.displayName,
-    filter: repository.analysis
+    filter: repository.analysis,
+    versionTags: repository.versioning.tags
   };
+}
+
+export function filterVersionTags(
+  tags: string[],
+  patterns: { include: string[]; exclude: string[] }
+): string[] {
+  const include = patterns.include.length === 0 ? ["**"] : patterns.include;
+  return tags.filter((tag) =>
+    include.some((pattern) => globMatches(pattern, tag)) &&
+    !patterns.exclude.some((pattern) => globMatches(pattern, tag))
+  );
+}
+
+export async function readRepositoryVersionTags(
+  repository: RepositoryConfig,
+  commitish: string
+): Promise<string[]> {
+  return filterVersionTags(
+    await listTagsPointingAt(repository.checkout.localPath, commitish),
+    repository.versioning.tags
+  );
 }

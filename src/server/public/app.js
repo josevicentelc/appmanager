@@ -318,6 +318,7 @@ function renderCandidates(candidates, audience) {
     : `<div class="candidate">
         <strong>${escapeHtml(candidate.repositoryKey)}</strong>
         <code>${escapeHtml(candidate.shortHash)}</code>
+        ${candidate.versionTags?.length ? `<code>${escapeHtml(candidate.versionTags.join(", "))}</code>` : ""}
         ${escapeHtml(candidate.subject)}
         <div>${escapeHtml(candidate.summary)}</div>
       </div>`

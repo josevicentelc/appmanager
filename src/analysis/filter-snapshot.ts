@@ -64,7 +64,7 @@ function normalizePath(path: string): string {
   return path.replace(/\\/g, "/").replace(/^\/+/, "");
 }
 
-function globMatches(pattern: string, path: string): boolean {
+export function globMatches(pattern: string, path: string): boolean {
   return globToRegExp(normalizePath(pattern)).test(path);
 }
 

@@ -23,6 +23,7 @@ export interface RetrievedCandidate {
   summary: string;
   intent: string | null;
   model: string;
+  versionTags: string[];
   score: number;
   scoreBreakdown: {
     matchedTerms: string[];
@@ -50,6 +51,7 @@ export async function retrieveCandidates(
     intent: string | null;
     model: string;
     fact_blob: string | null;
+    version_tags: string | null;
   }>>(
     `
     SELECT
@@ -61,6 +63,7 @@ export async function retrieveCandidates(
       ck.summary,
       ck.intent,
       ck.model,
+      (SELECT GROUP_CONCAT(cv.tag, char(10)) FROM commit_versions cv WHERE cv.commit_id = c.id) AS version_tags,
       GROUP_CONCAT(kf.fact_type || ' ' || kf.title || ' ' || kf.content, char(10)) AS fact_blob
     FROM commit_knowledge ck
     JOIN commits c ON c.id = ck.commit_id
@@ -111,6 +114,7 @@ function scoreRow(
     intent: string | null;
     model: string;
     fact_blob: string | null;
+    version_tags: string | null;
   },
   terms: string[],
   fallbackScore?: number
@@ -118,8 +122,9 @@ function scoreRow(
   const subjectMatches = countMatches(row.subject, terms);
   const summaryMatches = countMatches(`${row.summary} ${row.intent ?? ""}`, terms);
   const factMatches = countMatches(row.fact_blob ?? "", terms);
-  const matchedTerms = terms.filter((term) => normalizeText(`${row.subject} ${row.summary} ${row.intent ?? ""} ${row.fact_blob ?? ""}`).includes(term));
-  const score = fallbackScore ?? (subjectMatches * 4 + summaryMatches * 3 + factMatches * 2 + matchedTerms.length);
+  const versionMatches = countMatches(row.version_tags ?? "", terms);
+  const matchedTerms = terms.filter((term) => normalizeText(`${row.subject} ${row.summary} ${row.intent ?? ""} ${row.fact_blob ?? ""} ${row.version_tags ?? ""}`).includes(term));
+  const score = fallbackScore ?? (subjectMatches * 4 + summaryMatches * 3 + factMatches * 2 + versionMatches * 4 + matchedTerms.length);
 
   return {
     knowledgeId: row.knowledge_id,
@@ -131,6 +136,7 @@ function scoreRow(
     summary: row.summary,
     intent: row.intent,
     model: row.model,
+    versionTags: row.version_tags?.split("\n").filter(Boolean) ?? [],
     score,
     scoreBreakdown: {
       matchedTerms,
@@ -237,6 +243,7 @@ export function buildInvestigationContext(question: string, candidates: Retrieve
       `CANDIDATE ${index + 1}`,
       `Repository: ${candidate.repositoryKey}`,
       `Commit: ${candidate.commitHash}`,
+      `Versions: ${candidate.versionTags.join(", ") || "none"}`,
       `Date: ${candidate.committedAt}`,
       `Subject: ${candidate.subject}`,
       `Summary: ${candidate.summary}`,
@@ -260,6 +267,7 @@ export function buildHighLevelContext(question: string, candidates: RetrievedCan
     sections.push([
       `CHANGE ${index + 1}`,
       `Date: ${candidate.committedAt}`,
+      `Versions: ${candidate.versionTags.join(", ") || "Not specified"}`,
       `Description: ${candidate.summary}`,
       `Purpose: ${candidate.intent ?? "Not specified"}`
     ].join("\n"));
@@ -278,7 +286,7 @@ function getSearchTerms(question: string): string[] {
   ]);
 
   const terms = normalizeText(question)
-    .match(/[a-z0-9_]{3,}/g) ?? [];
+    .match(/[a-z0-9_][a-z0-9_.-]{1,}/g) ?? [];
 
   return [...new Set(expandTerms(terms))]
     .filter((term) => !stopwords.has(term))

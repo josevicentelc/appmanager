@@ -79,7 +79,11 @@ async function routeRequest(
           id: repository.id,
           displayName: repository.displayName,
           branch: repository.checkout.branch,
-          localPath: repository.checkout.localPath
+          localPath: repository.checkout.localPath,
+          sourceRepositoryId: repository.sourceRepositoryId,
+          projectId: repository.projectId,
+          projectRoot: repository.projectRoot,
+          tagPatterns: repository.versioning.tags
         }))
     });
     return;
