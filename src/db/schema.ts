@@ -102,4 +102,21 @@ CREATE TABLE IF NOT EXISTS source_references (
   end_line INTEGER,
   reference_type TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS conversations (
+  id TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS conversation_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+  content TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversation_messages_conversation
+  ON conversation_messages(conversation_id, id);
 `;

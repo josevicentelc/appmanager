@@ -15,6 +15,7 @@
         <button class="nav-tab active" data-tab="chat" onclick="switchTab('chat')">Chat</button>
         <button class="nav-tab" data-tab="dashboard" onclick="switchTab('dashboard')">Briefing ejecutivo</button>
         <button class="nav-tab" data-tab="reports" onclick="switchTab('reports')">Informes</button>
+        <button class="nav-tab" data-tab="settings" onclick="switchTab('settings')"><span aria-hidden="true">⚙</span> Configuración</button>
       </div>
     </nav>
 
@@ -30,6 +31,7 @@
             </fieldset>
             <select id="repository"></select>
             <button id="syncToggle" class="sync-toggle" type="button" disabled>Sincronización</button>
+            <button id="newConversation" class="new-conversation" type="button">Nueva conversación</button>
             <label class="context-toggle"><input id="includeContext" type="checkbox"> contexto</label>
           </div>
         </section>
@@ -62,6 +64,25 @@
           </div>
         </div>
       </div>
+    </div>
+
+    <div id="settings-tab" class="tab-content">
+      <main class="settings-container">
+        <header class="settings-header">
+          <div><p class="settings-eyebrow">Preferencias del servidor</p><h1>Configuración</h1><p>Los cambios se guardan localmente y se aplican a las siguientes consultas y ciclos de sincronización.</p></div>
+          <div class="settings-actions"><button id="reloadModels" type="button">Recargar modelos</button><button id="saveSettings" type="button">Guardar configuración</button></div>
+        </header>
+        <div id="settingsStatus" class="settings-status" role="status" aria-live="polite"></div>
+        <section class="settings-panel">
+          <label class="settings-model-label" for="settingsModel">Modelo LLM</label>
+          <select id="settingsModel"></select>
+          <p>Modelos cargados y publicados por el servidor compatible de LM Studio. Cambiar el modelo puede volver a analizar commits porque el conocimiento se versiona por modelo.</p>
+        </section>
+        <section class="settings-panel">
+          <div class="settings-section-title"><div><h2>Sincronización de repositorios</h2><p>Una fecha limita el historial desde ese día. El máximo de commits añade un límite adicional.</p></div></div>
+          <div id="settingsRepositories" class="settings-repositories"></div>
+        </section>
+      </main>
     </div>
   </div>
   <script src="/app.js"></script>

@@ -44,6 +44,7 @@ export async function answerInvestigationQuestion(
     repositoryKey?: string | null;
     limit: number;
     audience: InvestigationAudience;
+    history?: Array<{ role: "user" | "assistant"; content: string }>;
     onProgress?: (stage: InvestigationProgressStage, detail?: string) => void;
   }
 ): Promise<InvestigationResult> {
@@ -54,7 +55,7 @@ export async function answerInvestigationQuestion(
   const plan = planInvestigationQuery(input.question);
   const provider = new OpenAiCompatibleProvider(config.ai);
   const modelPlan = plan.kind === "candidate_search"
-    ? await provider.planCommitQuery(input.question).catch(() => null)
+    ? await provider.planCommitQuery(input.question, input.history ?? []).catch(() => null)
     : null;
   let retrieval: { candidates: RetrievedCandidate[]; coverage: InvestigationCoverage };
   let tool: InvestigationToolUsage;
@@ -63,17 +64,40 @@ export async function answerInvestigationQuestion(
     : { repositoryKey: input.repositoryKey, pageSize, maxCandidates };
   if (plan.kind === "candidate_search" && modelPlan?.action === "structured_search") {
     const filters = compactFilters(modelPlan.filters);
+    const structuredOptions = filters.repositoryKeys?.length
+      ? { pageSize, maxCandidates }
+      : options;
     tool = { name: "search_commits", detail: describeFilters(filters) };
     input.onProgress?.("using_tool", `${tool.name}: ${tool.detail}`);
-    retrieval = await searchCommits(db, filters, options);
+    retrieval = await searchCommits(db, filters, structuredOptions);
   } else if (plan.kind === "candidate_search") {
     tool = { name: "semantic_commit_search", detail: "relevancia en resúmenes, hechos y metadatos" };
     input.onProgress?.("using_tool", `${tool.name}: ${tool.detail}`);
-    retrieval = await retrieveCandidateSet(db, input.question, options);
+    const retrievalQuery = modelPlan?.retrievalQuery.trim() || input.question;
+    retrieval = await retrieveCandidateSet(db, retrievalQuery, options);
   } else if (plan.kind === "author_search") {
     tool = { name: "search_commits", detail: `autor contiene "${plan.authorQuery}"` };
     input.onProgress?.("using_tool", `${tool.name}: ${tool.detail}`);
     retrieval = await searchCommitsByAuthor(db, plan, options);
+  } else if (plan.kind === "author_repositories") {
+    const filters: CommitSearchFilters = {
+      author: plan.authorQuery,
+      repositoryKeys: plan.repositoryQueries,
+      match: "all",
+      sort: "newest"
+    };
+    tool = { name: "search_commits", detail: describeFilters(filters) };
+    input.onProgress?.("using_tool", `${tool.name}: ${tool.detail}`);
+    retrieval = await searchCommits(db, filters, { pageSize, maxCandidates });
+  } else if (plan.kind === "recent_repository_changes") {
+    const filters: CommitSearchFilters = {
+      repositoryKeys: plan.repositoryQueries,
+      match: "all",
+      sort: "newest"
+    };
+    tool = { name: "search_commits", detail: `${describeFilters(filters)}; limit=${plan.count}` };
+    input.onProgress?.("using_tool", `${tool.name}: ${tool.detail}`);
+    retrieval = await searchCommits(db, filters, { pageSize, maxCandidates: plan.count });
   } else {
     tool = { name: "search_commit_range", detail: `${plan.kind}: ${plan.rawText}` };
     input.onProgress?.("using_tool", `${tool.name}: ${tool.detail}`);
@@ -106,7 +130,8 @@ export async function answerInvestigationQuestion(
   const answer = await provider.answerQuestion({
     question: input.question,
     context,
-    audience: input.audience
+    audience: input.audience,
+    history: input.history ?? []
   });
 
   return {
@@ -227,18 +252,20 @@ function emptyAnswerForCoverage(coverage: InvestigationCoverage): string {
 }
 
 function compactFilters(filters: {
+  repositoryKeys: string[];
   author: string | null; committer: string | null; contentTerms: string[];
   fromDate: string | null; toDate: string | null; versions: string[]; hashes: string[];
   filePaths: string[]; factTypes: string[]; statuses: string[];
   match: "all" | "any"; sort: "newest" | "oldest";
 }): CommitSearchFilters {
   return {
+    ...(filters.repositoryKeys.length === 0 ? {} : { repositoryKeys: filters.repositoryKeys }),
     ...(filters.author === null ? {} : { author: filters.author }),
     ...(filters.committer === null ? {} : { committer: filters.committer }),
     ...(filters.contentTerms.length === 0 ? {} : { contentTerms: filters.contentTerms }),
     ...(filters.fromDate === null ? {} : { fromDate: filters.fromDate }),
     ...(filters.toDate === null ? {} : { toDate: filters.toDate }),
-    ...(filters.versions.length === 0 ? {} : { versions: filters.versions }),
+    ...(validExplicitVersions(filters.versions).length === 0 ? {} : { versions: validExplicitVersions(filters.versions) }),
     ...(filters.hashes.length === 0 ? {} : { hashes: filters.hashes }),
     ...(filters.filePaths.length === 0 ? {} : { filePaths: filters.filePaths }),
     ...(filters.factTypes.length === 0 ? {} : { factTypes: filters.factTypes }),
@@ -246,6 +273,12 @@ function compactFilters(filters: {
     match: filters.match,
     sort: filters.sort
   };
+}
+
+function validExplicitVersions(versions: string[]): string[] {
+  return versions.filter((version) => !/^(?:last|latest|recent|ultim|recient)[\s_-]*\d*/i.test(
+    version.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+  ));
 }
 
 function describeFilters(filters: CommitSearchFilters): string {

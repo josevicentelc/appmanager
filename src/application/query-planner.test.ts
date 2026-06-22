@@ -23,4 +23,20 @@ describe("planInvestigationQuery", () => {
       count: 3
     });
   });
+
+  it("extracts an author and multiple repository filters from a work-summary question", () => {
+    expect(planInvestigationQuery("en que ha estado trabajando jose vicente en los repositorios de electronics y webapp?")).toMatchObject({
+      kind: "author_repositories",
+      authorQuery: "jose vicente",
+      repositoryQueries: ["electronics", "webapp"]
+    });
+  });
+
+  it("treats latest repository changes as a bounded metadata query, not a version query", () => {
+    expect(planInvestigationQuery("listame los ultimos cambios en webapp")).toMatchObject({
+      kind: "recent_repository_changes",
+      repositoryQueries: ["webapp"],
+      count: 20
+    });
+  });
 });

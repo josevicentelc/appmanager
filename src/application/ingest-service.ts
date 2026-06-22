@@ -93,6 +93,7 @@ export async function ingestCommit(
 
   const redacted = redactSecrets(filtered.snapshot.diff);
   options.signal?.throwIfAborted();
+  const analysisModel = config.ai.chatModel;
   const provider = new OpenAiCompatibleProvider(config.ai);
   const analysis = await provider.analyzeCommit({
     repositoryPath: filtered.snapshot.repositoryPath,
@@ -111,7 +112,7 @@ export async function ingestCommit(
     repositoryDisplayName,
     snapshot: filtered.snapshot,
     analysis,
-    model: config.ai.chatModel,
+    model: analysisModel,
     versionTags
   });
 

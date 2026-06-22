@@ -97,6 +97,7 @@ export class OpenAiCompatibleProvider {
     question: string;
     context: string;
     audience: InvestigationAudience;
+    history?: Array<{ role: "user" | "assistant"; content: string }>;
   }): Promise<string> {
     const completion = await this.#client.chat.completions.create({
       model: this.#config.chatModel,
@@ -108,6 +109,7 @@ export class OpenAiCompatibleProvider {
           content: [
             "You are an engineering investigation assistant.",
             "Answer using only the provided commit memory context.",
+            "Conversation history is for resolving follow-up references only; it is not evidence for technical claims.",
             "Distinguish facts, inferences, and hypotheses.",
             "Do not claim root cause without confirmation.",
             "When the question requests a specific number of changes, cover that many distinct items when the context contains enough candidates.",
@@ -121,6 +123,7 @@ export class OpenAiCompatibleProvider {
             "Respond in Spanish."
           ].join("\n")
         },
+        ...(input.history ?? []).map((message) => ({ role: message.role, content: message.content })),
         {
           role: "user",
           content: `${input.context}\n\nAnswer the question above with the strongest candidates first.`
@@ -135,7 +138,10 @@ export class OpenAiCompatibleProvider {
     return content.trim();
   }
 
-  async planCommitQuery(question: string): Promise<CommitQueryPlan> {
+  async planCommitQuery(
+    question: string,
+    history: Array<{ role: "user" | "assistant"; content: string }> = []
+  ): Promise<CommitQueryPlan> {
     const completion = await this.#client.chat.completions.create({
       model: this.#config.chatModel,
       temperature: 0,
@@ -146,15 +152,19 @@ export class OpenAiCompatibleProvider {
         content: [
           "Plan how to retrieve Git commits for the user's question.",
           "Use structured_search for enumeration, filtering, counting, or sorting by metadata or indexed values.",
-          "Available filters: author, committer, contentTerms, dates, versions, hashes, file paths, fact types, and status.",
+          "Available filters: repositoryKeys, author, committer, contentTerms, dates, versions, hashes, file paths, fact types, and status.",
+          "Repository or project names must go only in repositoryKeys, never in contentTerms.",
           "Filters are combined with match=all unless the user explicitly asks for alternatives.",
           "Use semantic_search for explanatory questions where relevance ranking is more useful than exact filtering.",
           "Do not generate SQL. Extract only values explicitly requested by the user.",
+          "Use conversation history only to resolve references in the current question.",
+          "retrievalQuery must be a standalone version of the current question with relevant references resolved.",
           "Never convert relative version expressions such as last 3 versions into dates or synthetic version names.",
+          "For latest or recent changes, use sort=newest and leave versions empty unless the user supplied an explicit real tag.",
           "Dates must be real ISO YYYY-MM-DD values. Use null when the user did not specify a calendar date.",
           `Current date: ${new Date().toISOString().slice(0, 10)}.`
         ].join("\n")
-      }, { role: "user", content: question }]
+      }, { role: "user", content: JSON.stringify({ conversationHistory: history, currentQuestion: question }) }]
     });
     const content = completion.choices[0]?.message.content;
     if (!content) throw new Error("Model returned an empty commit query plan");

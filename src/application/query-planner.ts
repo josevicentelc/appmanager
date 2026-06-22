@@ -3,6 +3,8 @@ export type InvestigationPlan =
   | DateRangePlan
   | CommitRangePlan
   | RecentVersionsPlan
+  | AuthorRepositoriesPlan
+  | RecentRepositoryChangesPlan
   | AuthorSearchPlan
   | CandidateSearchPlan;
 
@@ -43,8 +45,30 @@ export interface RecentVersionsPlan {
   rawText: string;
 }
 
+export interface AuthorRepositoriesPlan {
+  kind: "author_repositories";
+  authorQuery: string;
+  repositoryQueries: string[];
+  rawText: string;
+}
+
+export interface RecentRepositoryChangesPlan {
+  kind: "recent_repository_changes";
+  repositoryQueries: string[];
+  count: number;
+  rawText: string;
+}
+
 export function planInvestigationQuery(question: string): InvestigationPlan {
   const normalized = normalizeQuestion(question);
+  const recentRepositoryChanges = detectRecentRepositoryChanges(normalized);
+  if (recentRepositoryChanges !== null) {
+    return { kind: "recent_repository_changes", ...recentRepositoryChanges };
+  }
+  const authorRepositories = detectAuthorRepositories(normalized);
+  if (authorRepositories !== null) {
+    return { kind: "author_repositories", ...authorRepositories };
+  }
   const authorSearch = detectAuthorSearch(normalized);
   if (authorSearch !== null) {
     return { kind: "author_search", ...authorSearch };
@@ -69,6 +93,34 @@ export function planInvestigationQuery(question: string): InvestigationPlan {
   }
 
   return { kind: "candidate_search" };
+}
+
+function detectRecentRepositoryChanges(question: string): Omit<RecentRepositoryChangesPlan, "kind"> | null {
+  const pattern = /\b(?:listame|muestrame|dame|resume)?\s*(?:los\s+)?ultim\w*\s*(\d{1,2})?\s*(?:cambios|commits)\s+(?:en|de)\s+(.+?)\s*[?.!]*$/i;
+  const match = pattern.exec(question);
+  const repositoryQueries = match?.[2]?.split(/\s+y\s+|\s*,\s*/).map((value) => value.trim()).filter(Boolean) ?? [];
+  if (repositoryQueries.length === 0) return null;
+  return {
+    repositoryQueries,
+    count: Math.min(Math.max(Number(match?.[1] ?? 20), 1), 100),
+    rawText: match?.[0] ?? question
+  };
+}
+
+function detectAuthorRepositories(question: string): Omit<AuthorRepositoriesPlan, "kind"> | null {
+  const patterns = [
+    /\ben que ha estado trabajando\s+(.+?)\s+en\s+(?:los\s+)?repositorios?\s+(?:de\s+)?(.+?)\s*[?.!]*$/i,
+    /\bque ha (?:hecho|trabajado)\s+(.+?)\s+en\s+(?:los\s+)?repositorios?\s+(?:de\s+)?(.+?)\s*[?.!]*$/i
+  ];
+  for (const pattern of patterns) {
+    const match = pattern.exec(question);
+    const authorQuery = match?.[1]?.trim();
+    const repositoryQueries = match?.[2]?.split(/\s+y\s+|\s*,\s*/).map((value) => value.trim()).filter(Boolean) ?? [];
+    if (authorQuery && repositoryQueries.length > 0) {
+      return { authorQuery, repositoryQueries, rawText: match?.[0] ?? question };
+    }
+  }
+  return null;
 }
 
 function detectRecentVersions(question: string): Omit<RecentVersionsPlan, "kind"> | null {

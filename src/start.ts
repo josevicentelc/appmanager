@@ -3,10 +3,12 @@ import { loadConfig } from "./config.js";
 import { loadRepositoryConfigs } from "./repositories/repository-config.js";
 import { CommitDigestDaemon } from "./daemon/commit-digest-daemon.js";
 import { startHttpServer } from "./server/main.js";
+import { registerRuntimeSettings } from "./runtime-settings.js";
 
 async function main(): Promise<void> {
   const config = await loadConfig();
   const repositories = await loadRepositoryConfigs();
+  await registerRuntimeSettings(config, repositories);
   const daemon = new CommitDigestDaemon(config, repositories);
   let server: Server | null = null;
 

@@ -2,7 +2,9 @@ import { z } from "zod";
 
 export const commitQueryPlanSchema = z.object({
   action: z.enum(["semantic_search", "structured_search"]),
+  retrievalQuery: z.string(),
   filters: z.object({
+    repositoryKeys: z.array(z.string()),
     author: z.string().nullable(), committer: z.string().nullable(),
     contentTerms: z.array(z.string()), fromDate: isoDate().nullable(), toDate: isoDate().nullable(),
     versions: z.array(z.string()), hashes: z.array(z.string()), filePaths: z.array(z.string()),
@@ -16,13 +18,15 @@ export type CommitQueryPlan = z.infer<typeof commitQueryPlanSchema>;
 export const commitQueryPlanJsonSchema = {
   name: "commit_query_plan", strict: true,
   schema: {
-    type: "object", additionalProperties: false, required: ["action", "filters"],
+    type: "object", additionalProperties: false, required: ["action", "retrievalQuery", "filters"],
     properties: {
       action: { type: "string", enum: ["semantic_search", "structured_search"] },
+      retrievalQuery: { type: "string" },
       filters: {
         type: "object", additionalProperties: false,
-        required: ["author", "committer", "contentTerms", "fromDate", "toDate", "versions", "hashes", "filePaths", "factTypes", "statuses", "match", "sort"],
+        required: ["repositoryKeys", "author", "committer", "contentTerms", "fromDate", "toDate", "versions", "hashes", "filePaths", "factTypes", "statuses", "match", "sort"],
         properties: {
+          repositoryKeys: stringArray(),
           author: nullableString(), committer: nullableString(), contentTerms: stringArray(),
           fromDate: nullableString(), toDate: nullableString(), versions: stringArray(), hashes: stringArray(),
           filePaths: stringArray(), factTypes: stringArray(), statuses: stringArray(),

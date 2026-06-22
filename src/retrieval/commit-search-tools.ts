@@ -17,6 +17,7 @@ export interface AuthorSearchResult {
 }
 
 export interface CommitSearchFilters {
+  repositoryKeys?: string[];
   author?: string;
   committer?: string;
   contentTerms?: string[];
@@ -157,8 +158,9 @@ function candidateFromRow(row: AuthorCommitRow, score: number): RetrievedCandida
 
 function buildPredicates(filters: CommitSearchFilters): Array<(row: AuthorCommitRow) => boolean> {
   const predicates: Array<(row: AuthorCommitRow) => boolean> = [];
-  if (filters.author) predicates.push((row) => normalizeName(row.author_name).includes(normalizeName(filters.author ?? "")));
-  if (filters.committer) predicates.push((row) => normalizeName(row.committer_name).includes(normalizeName(filters.committer ?? "")));
+  addListPredicate(predicates, filters.repositoryKeys, (row) => row.repository_key);
+  if (filters.author) predicates.push((row) => normalizeIdentity(row.author_name).includes(normalizeIdentity(filters.author ?? "")));
+  if (filters.committer) predicates.push((row) => normalizeIdentity(row.committer_name).includes(normalizeIdentity(filters.committer ?? "")));
   if (filters.fromDate) predicates.push((row) => row.committed_at >= `${filters.fromDate}T00:00:00`);
   if (filters.toDate) predicates.push((row) => row.committed_at < nextDay(filters.toDate ?? ""));
   addListPredicate(predicates, filters.hashes, (row) => row.commit_hash);
@@ -190,4 +192,8 @@ function nextDay(date: string): string {
 
 function normalizeName(value: string): string {
   return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim().replace(/\s+/g, " ");
+}
+
+function normalizeIdentity(value: string): string {
+  return normalizeName(value).replace(/[^a-z0-9]/g, "");
 }

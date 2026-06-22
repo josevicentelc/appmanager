@@ -49,6 +49,8 @@ Implemented:
 - LLM query planning through JSON Schema. The model selects validated filters but never generates or executes SQL.
 - Retrieval coverage reporting: matched/included commits, missing indexed knowledge, pagination, and truncation.
 - Search-tool activity shown live in chat and retained with each answer.
+- SQLite-backed conversation memory with a browser-session `conversationId`,
+  bounded recent history, follow-up query rewriting, and an explicit new-chat control.
 - CLI chat over indexed memory.
 - Executive briefing generated from analyzed evidence:
   - achievements, risks, decisions, watch items, confidence, and limitations;
@@ -63,6 +65,7 @@ Implemented:
 - Live chat progress events for retrieval, context preparation, and model response generation.
 - Chat repository selector combining configured repositories with SQLite-only indexed repositories.
 - Pause/resume control for the commit digest daemon. Pausing aborts the active model request without storing partial analysis.
+- Runtime settings UI for the active LM Studio model and per-repository sync enablement, commit limits, and date cutoffs.
 
 Not implemented yet:
 
@@ -109,6 +112,29 @@ Copy-Item config/repositories.example.yaml config/repositories.yaml
 ```
 
 Edit `config/application.yaml` so `ai.chatModel` matches a model currently loaded in LM Studio.
+
+### Runtime settings
+
+The **Configuration** tab (gear icon) provides settings that can be changed
+without editing YAML:
+
+- active LLM model, selected from models currently published by LM Studio;
+- synchronization enabled/disabled per configured repository or project;
+- optional maximum commit count per synchronization window;
+- optional inclusive ISO start date per repository.
+
+Settings are validated and written atomically to:
+
+```text
+config/runtime-settings.json
+```
+
+This file and its temporary write file are excluded by `.gitignore`. YAML files
+remain the defaults when no runtime setting exists. Model changes apply to new
+chat, briefing, report, and ingestion calls. Repository changes apply to the
+next daemon cycle; saving requests an immediate cycle when the daemon is active
+and not paused. Because indexed knowledge is versioned by model, selecting a
+different model can cause commits to be analyzed again for that model.
 
 ## Configuration
 
@@ -309,6 +335,9 @@ The local server currently exposes:
 GET  /api/health
 GET  /api/repositories
 POST /api/digest/control
+GET  /api/settings
+GET  /api/settings/models
+PUT  /api/settings
 GET  /api/summary
 POST /api/chat
 POST /api/chat/stream
@@ -325,6 +354,14 @@ GET  /dashboard.js
 ```
 
 `POST /api/chat/stream` returns Server-Sent Events for actual processing stages and then the complete result. The web UI uses it to show current work and elapsed time while the user waits.
+
+Both chat endpoints accept an optional `conversationId` and return the effective
+id. The server stores user/assistant turns in SQLite and supplies at most the 12
+most recent messages, bounded to approximately 12,000 characters. History is
+used to resolve follow-up references and maintain conversational continuity;
+retrieved commit context remains the required evidence for technical claims.
+The browser keeps the id in `sessionStorage`. **New conversation** creates a new
+id and clears the visible transcript.
 
 Chat results include `toolsUsed` and `coverage`. The streaming endpoint emits
 planning and tool-use stages before context construction and answer generation.

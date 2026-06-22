@@ -30,7 +30,7 @@ export async function buildExecutiveBriefing(
   config: AppConfig,
   options: { days: number; repositoryKey: string | null; refresh: boolean; language: "es" | "en" }
 ): Promise<ExecutiveBriefingResult> {
-  const cacheKey = `${options.repositoryKey ?? "all"}:${options.days}:${options.language}`;
+  const cacheKey = `${options.repositoryKey ?? "all"}:${options.days}:${options.language}:${config.ai.chatModel}`;
   const cached = cache.get(cacheKey);
   if (!options.refresh && cached && cached.expiresAt > Date.now()) {
     return { ...cached.value, cached: true };

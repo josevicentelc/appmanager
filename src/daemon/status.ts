@@ -43,3 +43,7 @@ export function registerDigestDaemonResumeHandler(handler: (() => void) | null):
 export function registerDigestDaemonPauseHandler(handler: (() => void) | null): void {
   pauseHandler = handler;
 }
+
+export function requestDigestDaemonCycle(): void {
+  resumeHandler?.();
+}

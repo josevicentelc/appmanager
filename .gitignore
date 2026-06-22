@@ -9,6 +9,8 @@ data/
 # Local application state and machine-specific repository paths.
 config/application.yaml
 config/repositories.yaml
+config/runtime-settings.json
+config/runtime-settings.json.tmp
 .dependencygraph/
 
 # Local Git fixture; tests create an isolated repository at runtime.

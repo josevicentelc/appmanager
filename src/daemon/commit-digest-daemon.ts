@@ -10,6 +10,7 @@ import {
   registerDigestDaemonPauseHandler,
   registerDigestDaemonResumeHandler
 } from "./status.js";
+import { getRuntimeRepositorySettings } from "../runtime-settings.js";
 
 export class CommitDigestDaemon {
   readonly #config: AppConfig;
@@ -23,7 +24,7 @@ export class CommitDigestDaemon {
 
   constructor(config: AppConfig, repositories: RepositoryConfig[]) {
     this.#config = config;
-    this.#repositories = repositories.filter((repository) => repository.enabled);
+    this.#repositories = repositories;
   }
 
   async start(): Promise<void> {
@@ -31,7 +32,7 @@ export class CommitDigestDaemon {
       return;
     }
     if (this.#repositories.length === 0) {
-      console.log("[digest] No enabled repositories configured");
+      console.log("[digest] No repositories configured");
       return;
     }
 
@@ -102,6 +103,9 @@ export class CommitDigestDaemon {
         if (this.#stopping || digestDaemonStatus.paused) {
           break;
         }
+        if (!getRuntimeRepositorySettings(repository).syncEnabled) {
+          continue;
+        }
         const lastRunAt = this.#lastRunAt.get(repository.id) ?? 0;
         const intervalMs = repository.polling.intervalSeconds * 1000;
         if (!force && now - lastRunAt < intervalMs) {
@@ -121,10 +125,10 @@ export class CommitDigestDaemon {
 
   async #digestRepository(db: EngineeringMemoryDb, repository: RepositoryConfig): Promise<void> {
     digestDaemonStatus.currentRepository = repository.id;
-    const history = repository.polling.initialHistory;
+    const runtimeSettings = getRuntimeRepositorySettings(repository);
     const commits = await listCommitsNewestFirst(repository.checkout.localPath, repository.checkout.branch, {
-      ...(history.count === undefined ? {} : { count: history.count }),
-      ...(history.mode === "since" && history.since !== undefined ? { since: history.since } : {}),
+      ...(runtimeSettings.commitCount === null ? {} : { count: runtimeSettings.commitCount }),
+      ...(runtimeSettings.since === null ? {} : { since: runtimeSettings.since }),
       ...(repository.projectRoot === null ? {} : { paths: [repository.projectRoot] })
     });
     const branchHead = await resolveCommit(repository.checkout.localPath, repository.checkout.branch);

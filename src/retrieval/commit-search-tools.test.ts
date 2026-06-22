@@ -51,10 +51,19 @@ describe("searchCommitsByAuthor", () => {
 
     expect(filtered.candidates.map((candidate) => candidate.commitHash)).toEqual(["a".repeat(40)]);
     expect(filtered.coverage.filters).toMatchObject({ author: "Juan Sevila", filePaths: ["audio/player.ts"] });
+
+    await db.run("INSERT INTO repositories (key, display_name, local_path) VALUES ('voxelcore/electronics', 'Electronics', '')");
+    await insertCommit(db, "d".repeat(40), "josevicentevoxelcare", "Electronics work", "2026-01-04T00:00:00Z", 2);
+    const multiDimension = await searchCommits(db, {
+      repositoryKeys: ["electronics", "webapp"],
+      author: "Jose Vicente",
+      match: "all"
+    }, { pageSize: 10, maxCandidates: 20 });
+    expect(multiDimension.candidates.map((candidate) => candidate.subject)).toEqual(["Electronics work"]);
   });
 });
 
-async function insertCommit(database: EngineeringMemoryDb, hash: string, author: string, subject: string, date: string): Promise<void> {
+async function insertCommit(database: EngineeringMemoryDb, hash: string, author: string, subject: string, date: string, repositoryId = 1): Promise<void> {
   await database.run(`INSERT INTO commits (repository_id, hash, author_name, author_email, authored_at, committer_name, committer_email, committed_at, subject, body, status, raw_metadata)
-    VALUES (1, ?, ?, '', ?, ?, '', ?, ?, '', 'indexed', '{}')`, hash, author, date, author, date, subject);
+    VALUES (?, ?, ?, '', ?, ?, '', ?, ?, '', 'indexed', '{}')`, repositoryId, hash, author, date, author, date, subject);
 }

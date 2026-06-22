@@ -6,13 +6,17 @@ import { loadConfig } from "../config.js";
 import { openEngineeringMemoryDb } from "../db/database.js";
 import { answerInvestigationQuestion } from "../application/investigation-service.js";
 import { loadRepositoryConfigs } from "../repositories/repository-config.js";
-import { digestDaemonStatus, setDigestDaemonPaused } from "../daemon/status.js";
+import { digestDaemonStatus, requestDigestDaemonCycle, setDigestDaemonPaused } from "../daemon/status.js";
 import { isInvestigationAudience } from "../domain/investigation-audience.js";
+import { appendConversationMessage, beginConversationTurn } from "../application/conversation-service.js";
+import { getRuntimeSettings, registerRuntimeSettings, saveRuntimeSettings } from "../runtime-settings.js";
+import { OpenAiCompatibleProvider } from "../ai/openai-compatible-provider.js";
 import { buildExecutiveBriefing } from "../application/executive-briefing-service.js";
 import { buildEmployeeWorkReports, listEmployeeAuthors, maxAuthorsPerReport, parseReportPeriod } from "../application/employee-work-report-service.js";
 
 export async function startHttpServer(): Promise<Server> {
   const config = await loadConfig();
+  await registerRuntimeSettings(config);
   const server = createServer(async (request, response) => {
     try {
       await routeRequest(request, response, config);
@@ -161,6 +165,51 @@ async function routeRequest(
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/settings") {
+    const repositories = await loadRepositoryConfigs();
+    sendJson(response, 200, {
+      settings: getRuntimeSettings(config, repositories),
+      repositories: repositories.map((repository) => ({
+        id: repository.id,
+        displayName: repository.displayName,
+        branch: repository.checkout.branch,
+        localPath: repository.checkout.localPath
+      }))
+    });
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/settings/models") {
+    const health = await new OpenAiCompatibleProvider(config.ai).healthCheck();
+    sendJson(response, 200, { models: health.models, selectedModel: config.ai.chatModel });
+    return;
+  }
+
+  if (request.method === "PUT" && url.pathname === "/api/settings") {
+    const body = await readJsonBody<unknown>(request);
+    const requestedModel = body && typeof body === "object" && "chatModel" in body
+      ? (body as { chatModel?: unknown }).chatModel
+      : null;
+    if (typeof requestedModel !== "string") {
+      sendJson(response, 400, { error: "chatModel is required" });
+      return;
+    }
+    const models = await new OpenAiCompatibleProvider(config.ai).healthCheck();
+    if (!models.models.includes(requestedModel)) {
+      sendJson(response, 400, { error: `Model is not available in LM Studio: ${requestedModel}` });
+      return;
+    }
+    const repositories = await loadRepositoryConfigs();
+    try {
+      const saved = await saveRuntimeSettings(body, config, repositories);
+      requestDigestDaemonCycle();
+      sendJson(response, 200, { settings: saved, applied: true });
+    } catch (error) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) });
+    }
+    return;
+  }
+
   if (request.method === "GET" && url.pathname === "/api/summary") {
     const db = await openEngineeringMemoryDb(config.database.path);
     try {
@@ -185,6 +234,7 @@ async function routeRequest(
       limit?: unknown;
       includeContext?: unknown;
       audience?: unknown;
+      conversationId?: unknown;
     }>(request);
     const question = typeof body.question === "string" ? body.question.trim() : "";
     if (!question) {
@@ -202,23 +252,26 @@ async function routeRequest(
 
     const db = await openEngineeringMemoryDb(config.database.path);
     try {
+      const conversation = await beginConversationTurn(
+        db,
+        typeof body.conversationId === "string" ? body.conversationId : null,
+        question
+      );
       const result = await answerInvestigationQuestion(db, config, {
         question,
         repositoryKey,
         limit,
-        audience
+        audience,
+        history: conversation.history
       });
+      await appendConversationMessage(db, conversation.conversationId, "assistant", result.answer);
       sendJson(response, 200, {
+        conversationId: conversation.conversationId,
         answer: result.answer,
         audience: result.audience,
         coverage: result.coverage,
         toolsUsed: result.toolsUsed,
-        candidates: audience === "user"
-          ? result.candidates.map((candidate) => ({
-            summary: candidate.summary,
-            committedAt: candidate.committedAt
-          }))
-          : result.candidates,
+        candidates: audience === "developer" ? result.candidates : [],
         context: audience === "developer" && body.includeContext === true ? result.context : undefined
       });
     } finally {
@@ -234,6 +287,7 @@ async function routeRequest(
       limit?: unknown;
       audience?: unknown;
       includeContext?: unknown;
+      conversationId?: unknown;
     }>(request);
     const question = typeof body.question === "string" ? body.question.trim() : "";
     if (!question) {
@@ -259,30 +313,33 @@ async function routeRequest(
 
     const db = await openEngineeringMemoryDb(config.database.path);
     try {
+      const conversation = await beginConversationTurn(
+        db,
+        typeof body.conversationId === "string" ? body.conversationId : null,
+        question
+      );
       const result = await answerInvestigationQuestion(db, config, {
         question,
         repositoryKey,
         limit,
         audience,
+        history: conversation.history,
         onProgress: (stage, detail) => sendEvent(response, {
           type: "status",
           stage,
           message: progressMessage(stage, detail)
         })
       });
+      await appendConversationMessage(db, conversation.conversationId, "assistant", result.answer);
       sendEvent(response, {
         type: "result",
         data: {
+          conversationId: conversation.conversationId,
           answer: result.answer,
           audience: result.audience,
           coverage: result.coverage,
           toolsUsed: result.toolsUsed,
-          candidates: audience === "user"
-            ? result.candidates.map((candidate) => ({
-              summary: candidate.summary,
-              committedAt: candidate.committedAt
-            }))
-            : result.candidates,
+          candidates: audience === "developer" ? result.candidates : [],
           context: audience === "developer" && body.includeContext === true
             ? result.context
             : undefined

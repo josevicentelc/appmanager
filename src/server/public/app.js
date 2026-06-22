@@ -3,6 +3,8 @@ const state = {
   employeeAuthors: [],
   digestDaemon: null,
   model: "",
+  conversationId: getOrCreateConversationId(),
+  settingsLoaded: false,
   pending: false
 };
 
@@ -14,6 +16,12 @@ const questionInput = document.querySelector("#question");
 const sendButton = document.querySelector("#sendButton");
 const includeContext = document.querySelector("#includeContext");
 const syncToggle = document.querySelector("#syncToggle");
+const newConversationButton = document.querySelector("#newConversation");
+const settingsModel = document.querySelector("#settingsModel");
+const settingsRepositories = document.querySelector("#settingsRepositories");
+const settingsStatus = document.querySelector("#settingsStatus");
+const saveSettingsButton = document.querySelector("#saveSettings");
+const reloadModelsButton = document.querySelector("#reloadModels");
 const audienceInputs = [...document.querySelectorAll('input[name="audience"]')];
 
 // Tab Navigation
@@ -44,6 +52,98 @@ function switchTab(tabName) {
   if (tabName === "chat") {
     setTimeout(() => questionInput?.focus(), 0);
   }
+  if (tabName === "settings" && !state.settingsLoaded) {
+    void loadSettings();
+  }
+}
+
+async function loadSettings() {
+  setSettingsStatus("Cargando configuración...", "loading");
+  saveSettingsButton.disabled = true;
+  try {
+    const [configuration, modelData] = await Promise.all([
+      fetchJson("/api/settings"),
+      fetchJson("/api/settings/models")
+    ]);
+    renderModelOptions(modelData.models, configuration.settings.chatModel);
+    renderRepositorySettings(configuration.repositories, configuration.settings.repositories);
+    state.settingsLoaded = true;
+    setSettingsStatus("Configuración cargada.", "success");
+  } catch (error) {
+    setSettingsStatus(error instanceof Error ? error.message : String(error), "error");
+  } finally {
+    saveSettingsButton.disabled = false;
+  }
+}
+
+function renderModelOptions(models, selectedModel) {
+  const available = Array.isArray(models) ? models : [];
+  const values = [...new Set(available)];
+  if (!values.includes(selectedModel)) values.unshift(selectedModel);
+  settingsModel.innerHTML = values.map((model) =>
+    `<option value="${escapeHtml(model)}"${model === selectedModel ? " selected" : ""}>${escapeHtml(model)}${available.includes(model) ? "" : " (no disponible)"}</option>`
+  ).join("");
+}
+
+function renderRepositorySettings(repositories, values) {
+  settingsRepositories.innerHTML = repositories.map((repository) => {
+    const setting = values[repository.id] || { syncEnabled: false, commitCount: null, since: null };
+    return `<article class="settings-repository" data-repository="${escapeHtml(repository.id)}">
+      <div class="settings-repository-identity"><label><input data-field="enabled" type="checkbox"${setting.syncEnabled ? " checked" : ""}><span>${escapeHtml(repository.displayName)}</span></label><code>${escapeHtml(repository.id)}</code><small>${escapeHtml(repository.branch)} · ${escapeHtml(repository.localPath)}</small></div>
+      <label>Máximo de commits<input data-field="count" type="number" min="1" max="100000" placeholder="Sin límite" value="${setting.commitCount ?? ""}"></label>
+      <label>Desde fecha<input data-field="since" type="date" value="${setting.since ? escapeHtml(setting.since.slice(0, 10)) : ""}"></label>
+    </article>`;
+  }).join("");
+}
+
+reloadModelsButton.addEventListener("click", async () => {
+  reloadModelsButton.disabled = true;
+  setSettingsStatus("Consultando LM Studio...", "loading");
+  try {
+    const data = await fetchJson("/api/settings/models");
+    renderModelOptions(data.models, settingsModel.value || data.selectedModel);
+    setSettingsStatus(`${data.models.length} modelos disponibles.`, "success");
+  } catch (error) {
+    setSettingsStatus(error instanceof Error ? error.message : String(error), "error");
+  } finally {
+    reloadModelsButton.disabled = false;
+  }
+});
+
+saveSettingsButton.addEventListener("click", async () => {
+  saveSettingsButton.disabled = true;
+  saveSettingsButton.textContent = "Guardando...";
+  setSettingsStatus("Validando y guardando configuración...", "loading");
+  try {
+    const repositories = {};
+    for (const row of settingsRepositories.querySelectorAll("[data-repository]")) {
+      const countValue = row.querySelector('[data-field="count"]').value.trim();
+      const sinceValue = row.querySelector('[data-field="since"]').value.trim();
+      repositories[row.dataset.repository] = {
+        syncEnabled: row.querySelector('[data-field="enabled"]').checked,
+        commitCount: countValue === "" ? null : Number(countValue),
+        since: sinceValue === "" ? null : sinceValue
+      };
+    }
+    const result = await fetchJson("/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chatModel: settingsModel.value, repositories })
+    });
+    state.model = result.settings.chatModel;
+    renderDigestControl();
+    setSettingsStatus("Configuración guardada y aplicada.", "success");
+  } catch (error) {
+    setSettingsStatus(error instanceof Error ? error.message : String(error), "error");
+  } finally {
+    saveSettingsButton.disabled = false;
+    saveSettingsButton.textContent = "Guardar configuración";
+  }
+});
+
+function setSettingsStatus(message, type) {
+  settingsStatus.textContent = message;
+  settingsStatus.className = `settings-status ${type}`;
 }
 
 // Report Generation Functions
@@ -338,7 +438,7 @@ async function boot() {
   state.repositories = repositories.repositories;
   state.digestDaemon = health.digestDaemon;
   state.model = health.model;
-  repositorySelect.innerHTML = state.repositories.map((repository) => (
+  repositorySelect.innerHTML = `<option value="">Todos los repositorios</option>` + state.repositories.map((repository) => (
     `<option value="${escapeHtml(repository.id)}">${escapeHtml(repositoryOptionLabel(repository))}</option>`
   )).join("");
 
@@ -436,10 +536,15 @@ form.addEventListener("submit", async (event) => {
       repositoryKey: repositorySelect.value,
       limit: 5,
       audience,
-      includeContext: audience === "developer" && includeContext.checked
+      includeContext: audience === "developer" && includeContext.checked,
+      conversationId: state.conversationId
     }, (message) => pendingMessage.setStage(message));
 
     pendingMessage.remove();
+    if (result.conversationId) {
+      state.conversationId = result.conversationId;
+      sessionStorage.setItem("engineering-memory-conversation-id", result.conversationId);
+    }
     appendAssistantMessage(result);
   } catch (error) {
     pendingMessage.remove();
@@ -450,22 +555,56 @@ form.addEventListener("submit", async (event) => {
   }
 });
 
+newConversationButton.addEventListener("click", () => {
+  state.conversationId = createConversationId();
+  sessionStorage.setItem("engineering-memory-conversation-id", state.conversationId);
+  messages.innerHTML = "";
+  questionInput.value = "";
+  questionInput.focus();
+});
+
+function getOrCreateConversationId() {
+  const stored = sessionStorage.getItem("engineering-memory-conversation-id");
+  if (stored) return stored;
+  const id = createConversationId();
+  sessionStorage.setItem("engineering-memory-conversation-id", id);
+  return id;
+}
+
+function createConversationId() {
+  return globalThis.crypto?.randomUUID?.() ?? `conversation_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+}
+
 function appendAssistantMessage(result) {
   const node = document.createElement("article");
   node.className = "message assistant";
 
   const candidates = Array.isArray(result.candidates) ? result.candidates : [];
-  node.innerHTML = [
+  const content = [
     "<h2>Respuesta</h2>",
-    `<pre>${escapeHtml(result.answer || "")}</pre>`,
+    `<div class="assistant-text">${renderAssistantText(result.answer || "")}</div>`,
     renderToolsUsed(result.toolsUsed),
     renderCoverage(result.coverage),
     renderCandidates(candidates, result.audience || "developer"),
     result.context ? `<details><summary>Contexto recuperado</summary><pre>${escapeHtml(result.context)}</pre></details>` : ""
   ].join("");
+  node.innerHTML = renderMessageFrame("assistant", content);
 
   messages.appendChild(node);
   scrollMessagesToBottom();
+}
+
+function renderAssistantText(value) {
+  return escapeHtml(value).split("\n").map((line) => {
+    const heading = /^\s*###\s+(.+)$/.exec(line);
+    return heading?.[1]
+      ? `<span class="assistant-heading">${renderInlineBold(heading[1])}</span>`
+      : renderInlineBold(line);
+  }).join("\n");
+}
+
+function renderInlineBold(value) {
+  return value.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
 }
 
 function renderToolsUsed(tools) {
@@ -506,24 +645,18 @@ function renderCoverage(coverage) {
 }
 
 function renderCandidates(candidates, audience) {
-  if (candidates.length === 0) {
+  if (audience !== "developer" || candidates.length === 0) {
     return "";
   }
 
-  const items = candidates.slice(0, 10).map((candidate) => audience === "user"
-    ? `<div class="candidate">
-        <strong>Cambio relacionado</strong>
-        <div>${escapeHtml(candidate.summary)}</div>
-      </div>`
-    : `<div class="candidate">
+  const items = candidates.slice(0, 10).map((candidate) => `<div class="candidate">
         <strong>${escapeHtml(candidate.repositoryKey)}</strong>
         <code>${escapeHtml(candidate.shortHash)}</code>
         ${candidate.versionTags?.length ? `<code>${escapeHtml(candidate.versionTags.join(", "))}</code>` : ""}
         ${escapeHtml(candidate.subject)}
         <div>Autor Git: ${escapeHtml(candidate.authorName)}</div>
         <div>${escapeHtml(candidate.summary)}</div>
-      </div>`
-  ).join("");
+      </div>`).join("");
 
   return `<div class="candidates">${items}</div>`;
 }
@@ -547,7 +680,7 @@ updateAudienceControls();
 function appendMessage(kind, title, content) {
   const node = document.createElement("article");
   node.className = `message ${kind}`;
-  node.innerHTML = `<h2>${escapeHtml(title)}</h2><pre>${escapeHtml(content)}</pre>`;
+  node.innerHTML = renderMessageFrame(kind, `<h2>${escapeHtml(title)}</h2><pre>${escapeHtml(content)}</pre>`);
   messages.appendChild(node);
   scrollMessagesToBottom();
 }
@@ -557,13 +690,13 @@ function appendPendingMessage() {
   node.className = "message assistant pending-message";
   node.setAttribute("role", "status");
   node.setAttribute("aria-live", "polite");
-  node.innerHTML = `
+  node.innerHTML = renderMessageFrame("assistant", `
     <h2>Procesando consulta</h2>
     <div class="pending-status">
       <span class="spinner" aria-hidden="true"></span>
       <span data-stage>Iniciando búsqueda</span>
       <span class="pending-time" data-elapsed>0 s</span>
-    </div>`;
+    </div>`);
   messages.appendChild(node);
   scrollMessagesToBottom();
 
@@ -589,6 +722,13 @@ function appendPendingMessage() {
       node.remove();
     }
   };
+}
+
+function renderMessageFrame(kind, content) {
+  const assistantAvatar = `<div class="message-avatar assistant-avatar" aria-hidden="true"><img src="/assets/voxelsensei.png" alt=""></div>`;
+  const userAvatar = `<div class="message-avatar user-avatar" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 12a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9Zm-8 9a8 8 0 0 1 16 0H4Z"/></svg></div>`;
+  const bubble = `<div class="message-bubble">${content}</div>`;
+  return kind === "user" ? `${bubble}${userAvatar}` : `${assistantAvatar}${bubble}`;
 }
 
 function scrollMessagesToBottom() {
