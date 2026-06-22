@@ -4,6 +4,7 @@ import { commitAnalysisJsonSchema, commitAnalysisSchema, type CommitAnalysis } f
 import type { InvestigationAudience } from "../domain/investigation-audience.js";
 import { executiveBriefingJsonSchema, executiveBriefingSchema, type ExecutiveBriefing } from "./executive-briefing-schema.js";
 import { employeeWorkReportJsonSchemaForEvidence, employeeWorkReportSchema, type EmployeeWorkReport } from "./employee-work-report-schema.js";
+import { commitQueryPlanJsonSchema, commitQueryPlanSchema, type CommitQueryPlan } from "./commit-query-schema.js";
 
 export interface AnalyzeCommitInput {
   repositoryPath: string;
@@ -44,7 +45,7 @@ export class OpenAiCompatibleProvider {
     };
   }
 
-  async analyzeCommit(input: AnalyzeCommitInput): Promise<CommitAnalysis> {
+  async analyzeCommit(input: AnalyzeCommitInput, signal?: AbortSignal): Promise<CommitAnalysis> {
     const completion = await this.#client.chat.completions.create({
       model: this.#config.chatModel,
       temperature: this.#config.temperature,
@@ -71,7 +72,7 @@ export class OpenAiCompatibleProvider {
           content: buildCommitPrompt(input)
         }
       ]
-    });
+    }, signal === undefined ? undefined : { signal });
 
     const content = completion.choices[0]?.message.content;
     if (!content) {
@@ -111,6 +112,8 @@ export class OpenAiCompatibleProvider {
             "Do not claim root cause without confirmation.",
             "When the question requests a specific number of changes, cover that many distinct items when the context contains enough candidates.",
             "When the context includes RETRIEVAL COVERAGE or RANGE COVERAGE, respect it and mention material truncation or missing indexed knowledge when it affects the answer.",
+            "When the context includes AUTHOR SEARCH COVERAGE, report every included commit if the user requested all commits, and clearly identify ambiguous matched Git authors.",
+            "When the context includes STRUCTURED SEARCH COVERAGE, treat the applied filters as authoritative and report material truncation or missing indexed knowledge.",
             "When asked who made a change, use the Git author supplied in the context.",
             "Do not confuse the Git author with the Git committer or claim either one is the pull request author.",
             ...audienceInstructions(input.audience),
@@ -130,6 +133,32 @@ export class OpenAiCompatibleProvider {
       throw new Error("Model returned an empty answer");
     }
     return content.trim();
+  }
+
+  async planCommitQuery(question: string): Promise<CommitQueryPlan> {
+    const completion = await this.#client.chat.completions.create({
+      model: this.#config.chatModel,
+      temperature: 0,
+      max_tokens: 1000,
+      response_format: { type: "json_schema", json_schema: commitQueryPlanJsonSchema },
+      messages: [{
+        role: "system",
+        content: [
+          "Plan how to retrieve Git commits for the user's question.",
+          "Use structured_search for enumeration, filtering, counting, or sorting by metadata or indexed values.",
+          "Available filters: author, committer, contentTerms, dates, versions, hashes, file paths, fact types, and status.",
+          "Filters are combined with match=all unless the user explicitly asks for alternatives.",
+          "Use semantic_search for explanatory questions where relevance ranking is more useful than exact filtering.",
+          "Do not generate SQL. Extract only values explicitly requested by the user.",
+          "Never convert relative version expressions such as last 3 versions into dates or synthetic version names.",
+          "Dates must be real ISO YYYY-MM-DD values. Use null when the user did not specify a calendar date.",
+          `Current date: ${new Date().toISOString().slice(0, 10)}.`
+        ].join("\n")
+      }, { role: "user", content: question }]
+    });
+    const content = completion.choices[0]?.message.content;
+    if (!content) throw new Error("Model returned an empty commit query plan");
+    return commitQueryPlanSchema.parse(JSON.parse(content));
   }
 
   async generateExecutiveBriefing(input: {

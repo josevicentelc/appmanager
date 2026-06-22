@@ -10,6 +10,13 @@ import {
   type RetrievedCandidate
 } from "../retrieval/retrieval-service.js";
 import { retrieveRangeCandidates, type RangeCoverage } from "../retrieval/version-range-retrieval.js";
+import {
+  searchCommits,
+  searchCommitsByAuthor,
+  type AuthorSearchCoverage,
+  type CommitSearchCoverage,
+  type CommitSearchFilters
+} from "../retrieval/commit-search-tools.js";
 import type { InvestigationAudience } from "../domain/investigation-audience.js";
 
 export interface InvestigationResult {
@@ -17,14 +24,17 @@ export interface InvestigationResult {
   answer: string;
   context: string;
   candidates: RetrievedCandidate[];
-  coverage: RetrievalCoverage | RangeCoverage;
+  coverage: InvestigationCoverage;
+  toolsUsed: InvestigationToolUsage[];
   audience: InvestigationAudience;
 }
 
-export type InvestigationProgressStage = "retrieving" | "building_context" | "answering";
+export type InvestigationProgressStage = "planning" | "using_tool" | "building_context" | "answering";
+export interface InvestigationToolUsage { name: string; detail: string; }
 
 const defaultMaxCandidates = 200;
 const hardMaxCandidates = 500;
+type InvestigationCoverage = RetrievalCoverage | RangeCoverage | AuthorSearchCoverage | CommitSearchCoverage;
 
 export async function answerInvestigationQuestion(
   db: EngineeringMemoryDb,
@@ -34,21 +44,41 @@ export async function answerInvestigationQuestion(
     repositoryKey?: string | null;
     limit: number;
     audience: InvestigationAudience;
-    onProgress?: (stage: InvestigationProgressStage) => void;
+    onProgress?: (stage: InvestigationProgressStage, detail?: string) => void;
   }
 ): Promise<InvestigationResult> {
-  input.onProgress?.("retrieving");
+  input.onProgress?.("planning");
   const explicitLimit = resolveExplicitRequestedLimit(input.question);
   const pageSize = Math.min(Math.max(input.limit, 1), 50);
   const maxCandidates = Math.min(explicitLimit ?? defaultMaxCandidates, hardMaxCandidates);
   const plan = planInvestigationQuery(input.question);
-  const retrieval = plan.kind === "candidate_search"
-    ? await retrieveCandidateSet(db, input.question, input.repositoryKey === undefined
-      ? { pageSize, maxCandidates }
-      : { repositoryKey: input.repositoryKey, pageSize, maxCandidates })
-    : await retrieveRangeCandidates(db, plan, input.repositoryKey === undefined
-      ? { pageSize, maxCandidates }
-      : { repositoryKey: input.repositoryKey, pageSize, maxCandidates });
+  const provider = new OpenAiCompatibleProvider(config.ai);
+  const modelPlan = plan.kind === "candidate_search"
+    ? await provider.planCommitQuery(input.question).catch(() => null)
+    : null;
+  let retrieval: { candidates: RetrievedCandidate[]; coverage: InvestigationCoverage };
+  let tool: InvestigationToolUsage;
+  const options = input.repositoryKey === undefined
+    ? { pageSize, maxCandidates }
+    : { repositoryKey: input.repositoryKey, pageSize, maxCandidates };
+  if (plan.kind === "candidate_search" && modelPlan?.action === "structured_search") {
+    const filters = compactFilters(modelPlan.filters);
+    tool = { name: "search_commits", detail: describeFilters(filters) };
+    input.onProgress?.("using_tool", `${tool.name}: ${tool.detail}`);
+    retrieval = await searchCommits(db, filters, options);
+  } else if (plan.kind === "candidate_search") {
+    tool = { name: "semantic_commit_search", detail: "relevancia en resúmenes, hechos y metadatos" };
+    input.onProgress?.("using_tool", `${tool.name}: ${tool.detail}`);
+    retrieval = await retrieveCandidateSet(db, input.question, options);
+  } else if (plan.kind === "author_search") {
+    tool = { name: "search_commits", detail: `autor contiene "${plan.authorQuery}"` };
+    input.onProgress?.("using_tool", `${tool.name}: ${tool.detail}`);
+    retrieval = await searchCommitsByAuthor(db, plan, options);
+  } else {
+    tool = { name: "search_commit_range", detail: `${plan.kind}: ${plan.rawText}` };
+    input.onProgress?.("using_tool", `${tool.name}: ${tool.detail}`);
+    retrieval = await retrieveRangeCandidates(db, plan, options);
+  }
   const candidates = retrieval.candidates;
 
   if (candidates.length === 0) {
@@ -59,6 +89,7 @@ export async function answerInvestigationQuestion(
       context,
       candidates,
       coverage: retrieval.coverage,
+      toolsUsed: [tool],
       audience: input.audience
     };
   }
@@ -71,7 +102,6 @@ export async function answerInvestigationQuestion(
     buildCoverageContext(retrieval.coverage),
     evidenceContext
   ].join("\n\n");
-  const provider = new OpenAiCompatibleProvider(config.ai);
   input.onProgress?.("answering");
   const answer = await provider.answerQuestion({
     question: input.question,
@@ -85,6 +115,7 @@ export async function answerInvestigationQuestion(
     context,
     candidates,
     coverage: retrieval.coverage,
+    toolsUsed: [tool],
     audience: input.audience
   };
 }
@@ -119,7 +150,30 @@ export function resolveExplicitRequestedLimit(question: string): number | null {
   return null;
 }
 
-function buildCoverageContext(coverage: RetrievalCoverage | RangeCoverage): string {
+function buildCoverageContext(coverage: InvestigationCoverage): string {
+  if (isAuthorCoverage(coverage)) {
+    return [
+      "AUTHOR SEARCH COVERAGE",
+      `Requested author: ${coverage.requestedAuthor}`,
+      `Matched Git authors: ${coverage.matchedAuthors.join(", ") || "none"}`,
+      `Commits found: ${coverage.totalCommits}`,
+      `Commits with indexed knowledge: ${coverage.analyzedCommits}`,
+      `Commits without indexed knowledge: ${coverage.missingKnowledgeCommits}`,
+      `Included commits: ${coverage.returnedCandidates}`,
+      `Truncated: ${coverage.truncated ? `yes, capped at ${coverage.requestedMaxCandidates}` : "no"}`
+    ].join("\n");
+  }
+  if (isStructuredCoverage(coverage)) {
+    return [
+      "STRUCTURED SEARCH COVERAGE",
+      `Applied filters: ${JSON.stringify(coverage.filters)}`,
+      `Commits found: ${coverage.totalCommits}`,
+      `Commits with indexed knowledge: ${coverage.analyzedCommits}`,
+      `Commits without indexed knowledge: ${coverage.missingKnowledgeCommits}`,
+      `Included commits: ${coverage.returnedCandidates}`,
+      `Truncated: ${coverage.truncated ? `yes, capped at ${coverage.requestedMaxCandidates}` : "no"}`
+    ].join("\n");
+  }
   if (isRangeCoverage(coverage)) {
     return [
       "RANGE COVERAGE",
@@ -129,6 +183,7 @@ function buildCoverageContext(coverage: RetrievalCoverage | RangeCoverage): stri
       `Commits in range: ${coverage.commitsInRange}`,
       `Analyzed commits in range: ${coverage.analyzedCommitsInRange}`,
       `Commits without indexed knowledge: ${coverage.missingKnowledgeCommits}`,
+      ...(coverage.includedVersions?.length ? [`Included versions: ${coverage.includedVersions.join(", ")}`] : []),
       `Included analyzed commits: ${coverage.returnedCandidates}`,
       `Internal page size: ${coverage.pageSize}`,
       `Pages read: ${coverage.pagesRead}`,
@@ -150,7 +205,18 @@ function isRangeCoverage(coverage: RetrievalCoverage | RangeCoverage): coverage 
   return "commitsInRange" in coverage;
 }
 
-function emptyAnswerForCoverage(coverage: RetrievalCoverage | RangeCoverage): string {
+function isAuthorCoverage(coverage: InvestigationCoverage): coverage is AuthorSearchCoverage {
+  return "mode" in coverage && coverage.mode === "author_search";
+}
+
+function isStructuredCoverage(coverage: InvestigationCoverage): coverage is CommitSearchCoverage {
+  return "mode" in coverage && coverage.mode === "structured_search";
+}
+
+function emptyAnswerForCoverage(coverage: InvestigationCoverage): string {
+  if (isAuthorCoverage(coverage)) {
+    return `No he encontrado commits cuyo autor Git coincida con "${coverage.requestedAuthor}" en el repositorio seleccionado.`;
+  }
   if (!isRangeCoverage(coverage)) {
     return "No he encontrado commits candidatos en la memoria indexada para esa pregunta.";
   }
@@ -158,4 +224,33 @@ function emptyAnswerForCoverage(coverage: RetrievalCoverage | RangeCoverage): st
     return `He localizado ${coverage.commitsInRange} commits en el rango solicitado, pero ninguno tiene conocimiento indexado para poder resumirlo con evidencia. Conviene digerir ese rango antes de generar el informe.`;
   }
   return "No he podido resolver commits analizados para el rango solicitado. Revisa que los tags, fechas o hashes existan en la memoria y que el repositorio seleccionado sea el correcto.";
+}
+
+function compactFilters(filters: {
+  author: string | null; committer: string | null; contentTerms: string[];
+  fromDate: string | null; toDate: string | null; versions: string[]; hashes: string[];
+  filePaths: string[]; factTypes: string[]; statuses: string[];
+  match: "all" | "any"; sort: "newest" | "oldest";
+}): CommitSearchFilters {
+  return {
+    ...(filters.author === null ? {} : { author: filters.author }),
+    ...(filters.committer === null ? {} : { committer: filters.committer }),
+    ...(filters.contentTerms.length === 0 ? {} : { contentTerms: filters.contentTerms }),
+    ...(filters.fromDate === null ? {} : { fromDate: filters.fromDate }),
+    ...(filters.toDate === null ? {} : { toDate: filters.toDate }),
+    ...(filters.versions.length === 0 ? {} : { versions: filters.versions }),
+    ...(filters.hashes.length === 0 ? {} : { hashes: filters.hashes }),
+    ...(filters.filePaths.length === 0 ? {} : { filePaths: filters.filePaths }),
+    ...(filters.factTypes.length === 0 ? {} : { factTypes: filters.factTypes }),
+    ...(filters.statuses.length === 0 ? {} : { statuses: filters.statuses }),
+    match: filters.match,
+    sort: filters.sort
+  };
+}
+
+function describeFilters(filters: CommitSearchFilters): string {
+  const entries = Object.entries(filters).filter(([, value]) => value !== undefined && (!Array.isArray(value) || value.length > 0));
+  return entries.length === 0
+    ? "sin filtros adicionales"
+    : entries.map(([key, value]) => `${key}=${Array.isArray(value) ? value.join(", ") : String(value)}`).join("; ");
 }

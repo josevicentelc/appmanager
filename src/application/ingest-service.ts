@@ -26,6 +26,7 @@ export interface IngestCommitOptions {
     include: string[];
     exclude: string[];
   };
+  signal?: AbortSignal;
 }
 
 export interface IndexedCommitResult {
@@ -91,6 +92,7 @@ export async function ingestCommit(
   }
 
   const redacted = redactSecrets(filtered.snapshot.diff);
+  options.signal?.throwIfAborted();
   const provider = new OpenAiCompatibleProvider(config.ai);
   const analysis = await provider.analyzeCommit({
     repositoryPath: filtered.snapshot.repositoryPath,
@@ -101,8 +103,9 @@ export async function ingestCommit(
     diff: redacted.text,
     diffWasTruncated: filtered.snapshot.diffWasTruncated,
     redactions: redacted.redactions
-  });
+  }, options.signal);
 
+  options.signal?.throwIfAborted();
   const stored = await storeCommitAnalysis(db, {
     repositoryKey,
     repositoryDisplayName,

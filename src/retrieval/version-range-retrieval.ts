@@ -1,10 +1,10 @@
-import type { CommitRangePlan, DateRangePlan, VersionRangePlan } from "../application/query-planner.js";
+import type { CommitRangePlan, DateRangePlan, RecentVersionsPlan, VersionRangePlan } from "../application/query-planner.js";
 import type { EngineeringMemoryDb } from "../db/database.js";
 import { listCommitsBetween, resolveCommit } from "../git/git-client.js";
 import { loadRepositoryConfigs, type RepositoryConfig } from "../repositories/repository-config.js";
 import type { RetrievalCoverage, RetrievedCandidate, RetrievedFact } from "./retrieval-service.js";
 
-export type RangePlan = VersionRangePlan | DateRangePlan | CommitRangePlan;
+export type RangePlan = VersionRangePlan | DateRangePlan | CommitRangePlan | RecentVersionsPlan;
 
 export interface RangeCoverage extends RetrievalCoverage {
   mode: RangePlan["kind"];
@@ -15,6 +15,7 @@ export interface RangeCoverage extends RetrievalCoverage {
   commitsInRange: number;
   analyzedCommitsInRange: number;
   missingKnowledgeCommits: number;
+  includedVersions?: string[];
 }
 
 export interface RangeRetrievalResult {
@@ -56,7 +57,12 @@ export async function retrieveRangeCandidates(
     return retrieveDateRange(db, plan, { repositoryKey: scope, pageSize, maxCandidates });
   }
 
-  const endpoints = plan.kind === "version_range"
+  const recentVersions = plan.kind === "recent_versions"
+    ? await resolveRecentVersionEndpoints(db, plan, scope)
+    : null;
+  const endpoints = plan.kind === "recent_versions"
+    ? recentVersions
+    : plan.kind === "version_range"
     ? await resolveVersionRangeEndpoints(db, plan, scope, repositories)
     : await resolveCommitRangeEndpoints(db, plan, scope, repositories);
   if (endpoints === null) {
@@ -97,9 +103,34 @@ export async function retrieveRangeCandidates(
       pageSize,
       pagesRead: Math.ceil(selected.length / pageSize),
       truncated: candidates.length > selected.length,
-      requestedMaxCandidates: maxCandidates
+      requestedMaxCandidates: maxCandidates,
+      ...(recentVersions === null ? {} : { includedVersions: recentVersions.includedVersions })
     }
   };
+}
+
+async function resolveRecentVersionEndpoints(
+  db: EngineeringMemoryDb,
+  plan: RecentVersionsPlan,
+  repositoryKey: string | null
+): Promise<({ from: VersionEndpoint; to: VersionEndpoint; includedVersions: string[] }) | null> {
+  if (repositoryKey === null) return null;
+  const rows = await db.all<Array<VersionEndpoint & { committed_at: string }>>(`
+    SELECT r.key AS repositoryKey, c.hash AS commitHash, cv.tag, c.committed_at
+    FROM commit_versions cv
+    JOIN commits c ON c.id = cv.commit_id
+    JOIN repositories r ON r.id = c.repository_id
+    WHERE r.key = ?
+    ORDER BY datetime(c.committed_at) DESC, cv.id DESC
+  `, repositoryKey);
+  const unique = rows.filter((row, index) => rows.findIndex((candidate) => candidate.tag === row.tag) === index);
+  const window = unique.slice(0, plan.count + 1);
+  if (window.length < 2) return null;
+  const includedVersions = window.slice(0, Math.min(plan.count, window.length - 1)).map((row) => row.tag);
+  const boundary = window[includedVersions.length];
+  const latest = window[0];
+  if (!boundary || !latest) return null;
+  return { from: boundary, to: latest, includedVersions };
 }
 
 async function retrieveDateRange(
@@ -430,12 +461,14 @@ function emptyRangeResult(
 }
 
 function planFromLabel(plan: RangePlan): string {
+  if (plan.kind === "recent_versions") return `previous to last ${plan.count} versions`;
   if (plan.kind === "version_range") return plan.fromVersion;
   if (plan.kind === "date_range") return plan.fromDate;
   return plan.fromCommit;
 }
 
 function planToLabel(plan: RangePlan): string {
+  if (plan.kind === "recent_versions") return `latest ${plan.count} versions`;
   if (plan.kind === "version_range") return plan.toVersion;
   if (plan.kind === "date_range") return plan.toDate;
   return plan.toCommit;

@@ -6,7 +6,7 @@ import { loadConfig } from "../config.js";
 import { openEngineeringMemoryDb } from "../db/database.js";
 import { answerInvestigationQuestion } from "../application/investigation-service.js";
 import { loadRepositoryConfigs } from "../repositories/repository-config.js";
-import { digestDaemonStatus } from "../daemon/status.js";
+import { digestDaemonStatus, setDigestDaemonPaused } from "../daemon/status.js";
 import { isInvestigationAudience } from "../domain/investigation-audience.js";
 import { buildExecutiveBriefing } from "../application/executive-briefing-service.js";
 import { buildEmployeeWorkReports, listEmployeeAuthors, maxAuthorsPerReport, parseReportPeriod } from "../application/employee-work-report-service.js";
@@ -72,11 +72,41 @@ async function routeRequest(
   }
 
   if (request.method === "GET" && url.pathname === "/api/repositories") {
-    const repositories = await loadRepositoryConfigs();
-    sendJson(response, 200, {
-      repositories: repositories
-        .filter((repository) => repository.enabled)
-        .map((repository) => ({
+    const configuredRepositories = (await loadRepositoryConfigs()).filter((repository) => repository.enabled);
+    const db = await openEngineeringMemoryDb(config.database.path);
+    try {
+      const storedRepositories = await db.all<Array<{
+        id: string;
+        displayName: string;
+        totalCommits: number;
+        indexedCommits: number;
+      }>>(`
+        SELECT r.key AS id, r.display_name AS displayName,
+          COUNT(DISTINCT c.id) AS totalCommits,
+          COUNT(DISTINCT CASE WHEN ck.id IS NOT NULL THEN c.id END) AS indexedCommits
+        FROM repositories r
+        LEFT JOIN commits c ON c.repository_id = r.id
+        LEFT JOIN commit_knowledge ck ON ck.commit_id = c.id
+        GROUP BY r.id
+      `);
+      const storedByKey = new Map(storedRepositories.map((repository) => [repository.id, repository]));
+      const repositories: Array<{
+        id: string;
+        displayName: string;
+        branch: string | null;
+        localPath: string | null;
+        sourceRepositoryId: string | null;
+        projectId: string | null;
+        projectRoot: string | null;
+        tagPatterns: { include: string[]; exclude: string[] } | null;
+        configured: boolean;
+        memoryOnly: boolean;
+        totalCommits: number;
+        indexedCommits: number;
+      }> = configuredRepositories.map((repository) => {
+        const stored = storedByKey.get(repository.id);
+        storedByKey.delete(repository.id);
+        return {
           id: repository.id,
           displayName: repository.displayName,
           branch: repository.checkout.branch,
@@ -84,9 +114,50 @@ async function routeRequest(
           sourceRepositoryId: repository.sourceRepositoryId,
           projectId: repository.projectId,
           projectRoot: repository.projectRoot,
-          tagPatterns: repository.versioning.tags
-        }))
-    });
+          tagPatterns: repository.versioning.tags,
+          configured: true,
+          memoryOnly: false,
+          totalCommits: stored?.totalCommits ?? 0,
+          indexedCommits: stored?.indexedCommits ?? 0
+        };
+      });
+      for (const stored of storedByKey.values()) {
+        repositories.push({
+          id: stored.id,
+          displayName: stored.displayName,
+          branch: null,
+          localPath: null,
+          sourceRepositoryId: null,
+          projectId: null,
+          projectRoot: null,
+          tagPatterns: null,
+          configured: false,
+          memoryOnly: true,
+          totalCommits: stored.totalCommits,
+          indexedCommits: stored.indexedCommits
+        });
+      }
+      repositories.sort((left, right) => Number(left.memoryOnly) - Number(right.memoryOnly)
+        || left.displayName.localeCompare(right.displayName));
+      sendJson(response, 200, { repositories });
+    } finally {
+      await db.close();
+    }
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/digest/control") {
+    if (!digestDaemonStatus.enabled) {
+      sendJson(response, 409, { error: "El daemon de sincronización no está activo en este proceso." });
+      return;
+    }
+    const body = await readJsonBody<{ paused?: unknown }>(request);
+    if (typeof body.paused !== "boolean") {
+      sendJson(response, 400, { error: "paused must be a boolean" });
+      return;
+    }
+    setDigestDaemonPaused(body.paused);
+    sendJson(response, 200, { digestDaemon: digestDaemonStatus });
     return;
   }
 
@@ -141,6 +212,7 @@ async function routeRequest(
         answer: result.answer,
         audience: result.audience,
         coverage: result.coverage,
+        toolsUsed: result.toolsUsed,
         candidates: audience === "user"
           ? result.candidates.map((candidate) => ({
             summary: candidate.summary,
@@ -192,10 +264,10 @@ async function routeRequest(
         repositoryKey,
         limit,
         audience,
-        onProgress: (stage) => sendEvent(response, {
+        onProgress: (stage, detail) => sendEvent(response, {
           type: "status",
           stage,
-          message: progressMessage(stage)
+          message: progressMessage(stage, detail)
         })
       });
       sendEvent(response, {
@@ -204,6 +276,7 @@ async function routeRequest(
           answer: result.answer,
           audience: result.audience,
           coverage: result.coverage,
+          toolsUsed: result.toolsUsed,
           candidates: audience === "user"
             ? result.candidates.map((candidate) => ({
               summary: candidate.summary,
@@ -592,10 +665,12 @@ async function generateReport(db: any, period: "weekly" | "monthly") {
   };
 }
 
-function progressMessage(stage: "retrieving" | "building_context" | "answering"): string {
+function progressMessage(stage: "planning" | "using_tool" | "building_context" | "answering", detail?: string): string {
   switch (stage) {
-    case "retrieving":
-      return "Buscando cambios relevantes";
+    case "planning":
+      return "Seleccionando estrategia de búsqueda";
+    case "using_tool":
+      return `Usando herramienta ${detail ?? "de búsqueda"}`;
     case "building_context":
       return "Preparando evidencias y contexto";
     case "answering":

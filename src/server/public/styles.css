@@ -172,6 +172,22 @@ select {
   opacity: 0.45;
 }
 
+.sync-toggle {
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.sync-toggle.running { border-color: #2d7a58; color: #246b52; }
+.sync-toggle.paused { border-color: #b16a1b; background: #fff5e8; color: #92520e; }
+.sync-toggle:disabled { cursor: not-allowed; opacity: .6; }
+
 .messages {
   display: flex;
   flex-direction: column;
@@ -257,6 +273,20 @@ select {
   color: var(--muted);
   font-size: 0.9rem;
 }
+
+.tools-used {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(23, 105, 170, .04);
+  color: var(--muted);
+  font-size: .88rem;
+}
+
+.tools-used summary { cursor: pointer; color: var(--text); font-weight: 700; }
+.tools-used > div { display: flex; gap: 10px; margin-top: 8px; align-items: baseline; }
+.tools-used code { color: var(--accent); }
 
 .candidates {
   display: grid;

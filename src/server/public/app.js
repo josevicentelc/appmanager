@@ -1,6 +1,8 @@
 const state = {
   repositories: [],
   employeeAuthors: [],
+  digestDaemon: null,
+  model: "",
   pending: false
 };
 
@@ -11,6 +13,7 @@ const form = document.querySelector("#chatForm");
 const questionInput = document.querySelector("#question");
 const sendButton = document.querySelector("#sendButton");
 const includeContext = document.querySelector("#includeContext");
+const syncToggle = document.querySelector("#syncToggle");
 const audienceInputs = [...document.querySelectorAll('input[name="audience"]')];
 
 // Tab Navigation
@@ -333,19 +336,76 @@ async function boot() {
   ]);
 
   state.repositories = repositories.repositories;
+  state.digestDaemon = health.digestDaemon;
+  state.model = health.model;
   repositorySelect.innerHTML = state.repositories.map((repository) => (
-    `<option value="${escapeHtml(repository.id)}">${escapeHtml(repository.displayName)} · ${escapeHtml(repository.branch)}</option>`
+    `<option value="${escapeHtml(repository.id)}">${escapeHtml(repositoryOptionLabel(repository))}</option>`
   )).join("");
 
-  const digest = health.digestDaemon?.enabled
-    ? health.digestDaemon.running ? "digest activo" : "digest esperando"
-    : "digest inactivo";
-  statusText.textContent = `${health.model} · ${digest}`;
+  renderDigestControl();
 
   const today = new Date();
   const from = new Date(today.getTime() - 29 * 86_400_000);
   document.querySelector("#employeeReportTo").value = today.toISOString().slice(0, 10);
   document.querySelector("#employeeReportFrom").value = from.toISOString().slice(0, 10);
+}
+
+function renderDigestControl() {
+  const digest = state.digestDaemon;
+  if (!digest?.enabled) {
+    syncToggle.disabled = true;
+    syncToggle.textContent = "Sincronización inactiva";
+    syncToggle.classList.remove("paused", "running");
+    statusText.textContent = `${state.model} · sincronización inactiva`;
+    return;
+  }
+  syncToggle.disabled = false;
+  syncToggle.classList.toggle("paused", digest.paused);
+  syncToggle.classList.toggle("running", digest.running && !digest.paused);
+  syncToggle.textContent = digest.paused ? "Reanudar sincronización" : "Pausar sincronización";
+  const digestLabel = digest.paused
+    ? digest.running ? "pausa solicitada; terminando cambio actual" : "sincronización pausada"
+    : digest.running ? "sincronizando repositorios" : "sincronización esperando";
+  statusText.textContent = `${state.model} · ${digestLabel}`;
+}
+
+syncToggle.addEventListener("click", async () => {
+  const digest = state.digestDaemon;
+  if (!digest?.enabled) return;
+  syncToggle.disabled = true;
+  syncToggle.textContent = digest.paused ? "Reanudando..." : "Pausando...";
+  try {
+    const result = await fetchJson("/api/digest/control", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paused: !digest.paused })
+    });
+    state.digestDaemon = result.digestDaemon;
+    renderDigestControl();
+  } catch (error) {
+    syncToggle.disabled = false;
+    renderDigestControl();
+    appendMessage("assistant", "Error de sincronización", error instanceof Error ? error.message : String(error));
+  }
+});
+
+setInterval(async () => {
+  if (!state.digestDaemon?.enabled) return;
+  try {
+    const health = await fetchJson("/api/health");
+    state.digestDaemon = health.digestDaemon;
+    state.model = health.model;
+    renderDigestControl();
+  } catch {
+    // A transient health-check failure should not interrupt chat usage.
+  }
+}, 3000);
+
+function repositoryOptionLabel(repository) {
+  if (repository.memoryOnly) {
+    return `${repository.displayName} · memoria SQLite · ${repository.indexedCommits} analizados`;
+  }
+  return `${repository.displayName} · ${repository.branch}`;
 }
 
 questionInput.addEventListener("keydown", (event) => {
@@ -398,6 +458,7 @@ function appendAssistantMessage(result) {
   node.innerHTML = [
     "<h2>Respuesta</h2>",
     `<pre>${escapeHtml(result.answer || "")}</pre>`,
+    renderToolsUsed(result.toolsUsed),
     renderCoverage(result.coverage),
     renderCandidates(candidates, result.audience || "developer"),
     result.context ? `<details><summary>Contexto recuperado</summary><pre>${escapeHtml(result.context)}</pre></details>` : ""
@@ -407,9 +468,26 @@ function appendAssistantMessage(result) {
   scrollMessagesToBottom();
 }
 
+function renderToolsUsed(tools) {
+  if (!Array.isArray(tools) || tools.length === 0) return "";
+  return `<details class="tools-used"><summary>Herramientas utilizadas (${tools.length})</summary>${tools.map((tool) =>
+    `<div><code>${escapeHtml(tool.name)}</code><span>${escapeHtml(tool.detail)}</span></div>`).join("")}</details>`;
+}
+
 function renderCoverage(coverage) {
   if (!coverage) {
     return "";
+  }
+  if (coverage.mode === "author_search") {
+    const authors = coverage.matchedAuthors?.join(", ") || coverage.requestedAuthor;
+    const missing = coverage.missingKnowledgeCommits ? ` · ${coverage.missingKnowledgeCommits} sin análisis` : "";
+    const truncated = coverage.truncated ? ` · limitado a ${coverage.requestedMaxCandidates}` : "";
+    return `<div class="retrieval-coverage">${coverage.returnedCandidates} de ${coverage.totalCommits} commits de ${escapeHtml(authors)}${missing}${truncated}</div>`;
+  }
+  if (coverage.mode === "structured_search") {
+    const missing = coverage.missingKnowledgeCommits ? ` · ${coverage.missingKnowledgeCommits} sin análisis` : "";
+    const truncated = coverage.truncated ? ` · limitado a ${coverage.requestedMaxCandidates}` : "";
+    return `<div class="retrieval-coverage">${coverage.returnedCandidates} de ${coverage.totalCommits} commits encontrados mediante filtros${missing}${truncated}</div>`;
   }
   if (typeof coverage.commitsInRange === "number") {
     const missing = coverage.missingKnowledgeCommits
@@ -418,7 +496,8 @@ function renderCoverage(coverage) {
     const truncated = coverage.truncated
       ? ` · limitado a ${coverage.requestedMaxCandidates}`
       : "";
-    return `<div class="retrieval-coverage">${coverage.returnedCandidates} incluidos de ${coverage.analyzedCommitsInRange} commits analizados; ${coverage.commitsInRange} commits en el rango${missing}${truncated}</div>`;
+    const versions = coverage.includedVersions?.length ? ` · versiones: ${coverage.includedVersions.map(escapeHtml).join(", ")}` : "";
+    return `<div class="retrieval-coverage">${coverage.returnedCandidates} incluidos de ${coverage.analyzedCommitsInRange} commits analizados; ${coverage.commitsInRange} commits en el rango${versions}${missing}${truncated}</div>`;
   }
   const truncated = coverage.truncated
     ? ` · limitado a ${coverage.requestedMaxCandidates}`

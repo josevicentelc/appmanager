@@ -2,6 +2,8 @@ export type InvestigationPlan =
   | VersionRangePlan
   | DateRangePlan
   | CommitRangePlan
+  | RecentVersionsPlan
+  | AuthorSearchPlan
   | CandidateSearchPlan;
 
 export interface VersionRangePlan {
@@ -29,8 +31,28 @@ export interface CandidateSearchPlan {
   kind: "candidate_search";
 }
 
+export interface AuthorSearchPlan {
+  kind: "author_search";
+  authorQuery: string;
+  rawText: string;
+}
+
+export interface RecentVersionsPlan {
+  kind: "recent_versions";
+  count: number;
+  rawText: string;
+}
+
 export function planInvestigationQuery(question: string): InvestigationPlan {
   const normalized = normalizeQuestion(question);
+  const authorSearch = detectAuthorSearch(normalized);
+  if (authorSearch !== null) {
+    return { kind: "author_search", ...authorSearch };
+  }
+  const recentVersions = detectRecentVersions(normalized);
+  if (recentVersions !== null) {
+    return { kind: "recent_versions", ...recentVersions };
+  }
   const versionRange = detectVersionRange(normalized);
   if (versionRange !== null) {
     return { kind: "version_range", ...versionRange };
@@ -47,6 +69,37 @@ export function planInvestigationQuery(question: string): InvestigationPlan {
   }
 
   return { kind: "candidate_search" };
+}
+
+function detectRecentVersions(question: string): Omit<RecentVersionsPlan, "kind"> | null {
+  const patterns = [
+    /\b(?:ultim\w*|recient\w*)\s+(\d{1,2})\s+version(?:es)?\b/i,
+    /\blast\s+(\d{1,2})\s+versions?\b/i
+  ];
+  for (const pattern of patterns) {
+    const match = pattern.exec(question);
+    const count = Number(match?.[1]);
+    if (match && Number.isInteger(count) && count > 0) {
+      return { count: Math.min(count, 20), rawText: match[0] };
+    }
+  }
+  return null;
+}
+
+function detectAuthorSearch(question: string): Omit<AuthorSearchPlan, "kind"> | null {
+  const patterns = [
+    /\b(?:todos\s+los\s+)?commits?\s+(?:hechos?|realizados?|creados?|escritos?)\s+por\s+(.+?)\s*[?.!]*$/i,
+    /\b(?:todos\s+los\s+)?commits?\s+de\s+(.+?)\s*[?.!]*$/i,
+    /\b(?:all\s+)?commits?\s+(?:authored|made|created)\s+by\s+(.+?)\s*[?.!]*$/i
+  ];
+  for (const pattern of patterns) {
+    const match = pattern.exec(question);
+    const authorQuery = match?.[1]?.trim().replace(/^["']|["']$/g, "");
+    if (authorQuery) {
+      return { authorQuery, rawText: match?.[0] ?? question };
+    }
+  }
+  return null;
 }
 
 function detectVersionRange(question: string): Omit<VersionRangePlan, "kind"> | null {

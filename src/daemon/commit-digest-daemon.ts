@@ -5,7 +5,11 @@ import { syncCommitVersionTags } from "../db/commit-store.js";
 import { listCommitsNewestFirst, resolveCommit } from "../git/git-client.js";
 import { ingestCommit, ingestOptionsFromRepository, readRepositoryVersionTags } from "../application/ingest-service.js";
 import type { RepositoryConfig } from "../repositories/repository-config.js";
-import { digestDaemonStatus } from "./status.js";
+import {
+  digestDaemonStatus,
+  registerDigestDaemonPauseHandler,
+  registerDigestDaemonResumeHandler
+} from "./status.js";
 
 export class CommitDigestDaemon {
   readonly #config: AppConfig;
@@ -14,6 +18,7 @@ export class CommitDigestDaemon {
   #db: EngineeringMemoryDb | null = null;
   #timer: NodeJS.Timeout | null = null;
   #cyclePromise: Promise<void> | null = null;
+  #activeAnalysis: AbortController | null = null;
   #stopping = false;
 
   constructor(config: AppConfig, repositories: RepositoryConfig[]) {
@@ -32,6 +37,9 @@ export class CommitDigestDaemon {
 
     this.#db = await openEngineeringMemoryDb(this.#config.database.path);
     digestDaemonStatus.enabled = true;
+    digestDaemonStatus.paused = false;
+    registerDigestDaemonResumeHandler(() => this.#scheduleCycle(true));
+    registerDigestDaemonPauseHandler(() => this.#activeAnalysis?.abort());
     const schedulerIntervalMs = Math.min(
       ...this.#repositories.map((repository) => repository.polling.intervalSeconds * 1000)
     );
@@ -44,6 +52,10 @@ export class CommitDigestDaemon {
   async stop(): Promise<void> {
     this.#stopping = true;
     digestDaemonStatus.enabled = false;
+    digestDaemonStatus.paused = false;
+    registerDigestDaemonResumeHandler(null);
+    registerDigestDaemonPauseHandler(null);
+    this.#activeAnalysis?.abort();
     if (this.#timer !== null) {
       clearInterval(this.#timer);
       this.#timer = null;
@@ -56,7 +68,7 @@ export class CommitDigestDaemon {
   }
 
   #scheduleCycle(force: boolean): void {
-    if (this.#stopping || this.#cyclePromise !== null) {
+    if (this.#stopping || digestDaemonStatus.paused || this.#cyclePromise !== null) {
       if (this.#cyclePromise !== null) {
         console.log("[digest] Cycle skipped because digestion is already running");
       }
@@ -87,7 +99,7 @@ export class CommitDigestDaemon {
     try {
       const now = Date.now();
       for (const repository of this.#repositories) {
-        if (this.#stopping) {
+        if (this.#stopping || digestDaemonStatus.paused) {
           break;
         }
         const lastRunAt = this.#lastRunAt.get(repository.id) ?? 0;
@@ -119,7 +131,7 @@ export class CommitDigestDaemon {
     console.log(`[digest] ${repository.id}/${repository.checkout.branch} head=${branchHead.slice(0, 8)} candidates=${commits.length}`);
 
     for (const commitHash of commits) {
-      if (this.#stopping) {
+      if (this.#stopping || digestDaemonStatus.paused) {
         break;
       }
       digestDaemonStatus.currentCommit = commitHash;
@@ -135,8 +147,13 @@ export class CommitDigestDaemon {
       }
 
       console.log(`[digest] ${repository.id} analyzing ${commitHash.slice(0, 8)}`);
+      const analysisController = new AbortController();
+      this.#activeAnalysis = analysisController;
       try {
-        const result = await ingestCommit(db, this.#config, ingestOptionsFromRepository(repository, commitHash));
+        const result = await ingestCommit(db, this.#config, {
+          ...ingestOptionsFromRepository(repository, commitHash),
+          signal: analysisController.signal
+        });
         if (result.status === "ignored") {
           digestDaemonStatus.ignoredThisCycle += 1;
           console.log(`[digest] ${repository.id} ignored ${commitHash.slice(0, 8)} ${result.reason}`);
@@ -145,11 +162,19 @@ export class CommitDigestDaemon {
           console.log(`[digest] ${repository.id} indexed ${commitHash.slice(0, 8)} ${result.subject}`);
         }
       } catch (error) {
+        if (analysisController.signal.aborted) {
+          console.log(`[digest] ${repository.id} paused ${commitHash.slice(0, 8)} before storing analysis`);
+          break;
+        }
         digestDaemonStatus.failedThisCycle += 1;
         console.error(
           `[digest] ${repository.id} failed ${commitHash.slice(0, 8)}`,
           error instanceof Error ? error.message : error
         );
+      } finally {
+        if (this.#activeAnalysis === analysisController) {
+          this.#activeAnalysis = null;
+        }
       }
     }
   }

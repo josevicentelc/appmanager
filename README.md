@@ -41,25 +41,28 @@ Implemented:
 - Periodic commit digest daemon for configured local repositories.
 - Global digestion lock to prevent overlapping LM Studio analysis cycles.
 - Newest-to-oldest commit traversal within each configured history window.
-- Basic retrieval over summaries and facts.
+- Retrieval over summaries, facts, Git metadata, files, authors, versions, and date/commit ranges.
 - Recency fallback for broad questions like "what changed recently?"
 - Direct lookup by short or full Git commit hash.
+- Range-aware retrieval for explicit versions, dates, commit hashes, and the latest N real version tags.
+- Validated `search_commits` filters for author, committer, content, dates, versions, hashes, files, fact types, status, ordering, and AND/OR matching.
+- LLM query planning through JSON Schema. The model selects validated filters but never generates or executes SQL.
+- Retrieval coverage reporting: matched/included commits, missing indexed knowledge, pagination, and truncation.
+- Search-tool activity shown live in chat and retained with each answer.
 - CLI chat over indexed memory.
-- **Executive Dashboard v1.0** ✨ NEW:
-  - Visual analytics dashboard with real-time metrics
-  - Multi-tab interface (Chat, Dashboard, Reports)
-  - Metrics endpoints (velocity, stability, reports)
-  - Top contributors tracking
-  - Critical areas identification
-  - Stability index calculation
-  - Weekly/monthly reporting
-  - Auto-refresh UI
-  - PDF export capability
+- Executive briefing generated from analyzed evidence:
+  - achievements, risks, decisions, watch items, confidence, and limitations;
+  - repository and 7/30/90-day filters;
+  - Spanish and English output;
+  - evidence links and PDF/text export;
+  - 15-minute language-aware cache.
 - Local web UI and HTTP API.
 - Audience-aware answers with `Desarrollador` and `Usuario` modes.
 - Git author and committer metadata available to retrieval and model context.
 - Combined work reports by Git author and inclusive date range, grouped by project/repository.
 - Live chat progress events for retrieval, context preparation, and model response generation.
+- Chat repository selector combining configured repositories with SQLite-only indexed repositories.
+- Pause/resume control for the commit digest daemon. Pausing aborts the active model request without storing partial analysis.
 
 Not implemented yet:
 
@@ -284,6 +287,12 @@ npm start
 
 The daemon starts a digestion cycle immediately and then monitors repositories using each repository's `polling.intervalSeconds`. It processes one global cycle at a time, visits each eligible repository sequentially, walks commits from newest to oldest, and skips commits already indexed for the configured model.
 
+When running with `npm start`, the chat header exposes a pause/resume control.
+Pausing cancels the active LM Studio request, stores no partial analysis, and
+prevents another commit from starting. Resuming requests an immediate cycle.
+The control is disabled with `npm run server` because that command does not
+start a daemon.
+
 The daemon currently monitors local branch state. It does not run `git fetch`, update branches, or clone missing repositories yet.
 
 Open:
@@ -299,9 +308,11 @@ The local server currently exposes:
 ```text
 GET  /api/health
 GET  /api/repositories
+POST /api/digest/control
 GET  /api/summary
 POST /api/chat
 POST /api/chat/stream
+GET  /api/executive/briefing
 GET  /api/metrics/dashboard
 GET  /api/metrics/velocity
 GET  /api/metrics/report
@@ -315,7 +326,60 @@ GET  /dashboard.js
 
 `POST /api/chat/stream` returns Server-Sent Events for actual processing stages and then the complete result. The web UI uses it to show current work and elapsed time while the user waits.
 
+Chat results include `toolsUsed` and `coverage`. The streaming endpoint emits
+planning and tool-use stages before context construction and answer generation.
+The UI displays the active tool while the request runs and keeps an expandable
+tool trace with the final answer.
+
 `GET /api/health` includes live digest daemon state: whether it is running, current repository/commit, timestamps, and indexed/failed counts for the active cycle.
+
+`GET /api/repositories` merges enabled YAML repositories with repositories
+found only in SQLite. SQLite-only entries can be queried from chat and reports,
+but cannot be digested or resolved against a local checkout.
+
+`POST /api/digest/control` accepts `{ "paused": true }` or
+`{ "paused": false }`. It returns `409` when the HTTP process does not own an
+active daemon.
+
+### Chat search tools
+
+The chat uses an application-controlled retrieval pipeline:
+
+1. deterministic parsing handles author queries and explicit version, date,
+   commit, or latest-N-version ranges;
+2. for other questions, the model returns a JSON-Schema-validated plan choosing
+   semantic retrieval or `search_commits`;
+3. the application executes only supported filters with parameterized database
+   access; the model cannot generate or execute SQL;
+4. retrieved evidence and coverage are sent to the answer model.
+
+`search_commits` supports combinable filters for Git author, committer, indexed
+content, ISO dates, stored version tags, commit hashes, changed file paths,
+knowledge fact types, commit status, sort order, and AND/OR matching. Invalid
+model plans fall back to semantic retrieval. Dates must use `YYYY-MM-DD`; the
+planner is explicitly forbidden from converting relative version expressions
+into synthetic dates or values such as `last_3`.
+
+Relative version questions use real stored tags. For example, "summarize the
+last 3 versions" resolves the latest four consecutive tag endpoints and returns
+the commits in the three intervals between them. The selected repository must
+contain enough stored tags.
+
+Useful test questions:
+
+```text
+dame todos los commits hechos por Juan
+resume los cambios de las últimas 3 versiones
+que cambió entre la versión server#4.20.0 y server#4.21.2
+commits entre 2026-06-01 y 2026-06-15
+busca cambios sobre restricciones de tamaño en archivos CAD
+```
+
+Every answer includes retrieval coverage. Author queries report ambiguous Git
+identities, structured searches report applied filters, and range searches
+report resolved endpoints, included versions, missing indexed knowledge, and
+truncation. The web UI also retains the tool name and arguments under
+**Tools used**.
 
 `GET /api/employee-reports/authors` lists exact `author_name` identities with
 digested commits. `POST /api/employee-reports` accepts `from`, `to`, an optional
@@ -364,10 +428,10 @@ Invoke-RestMethod -Method Post `
 ```
 
 Set `authorNames` to an array such as `@("Git Author Name")` to select an
-employee. A request is limited to 366 days and 50 authors. Up to 100 analyzed
-commits are selected per employee with balanced representation across their
-repositories. Reports are generated sequentially to avoid overlapping local
-model calls.
+employee. A request is limited to 366 days and 50 authors. All matching
+analyzed commits are grouped by repository and processed sequentially in
+batches of 50 evidence rows. Partial batch failures and final consolidation
+limits are declared in the returned report.
 
 Git attribution has precise semantics:
 
@@ -378,45 +442,33 @@ Git attribution has precise semantics:
 PR descriptions, reviewers, approvals, and formal PR authorship require a
 future provider-specific API integration.
 
-### Dashboard Ejecutivo (Executive Dashboard)
+### Executive briefing and reports
 
-**Version 1.0** - Released 2026-06-21
+The **Executive briefing** tab asks the LLM to digest analyzed commit knowledge
+into decision-oriented sections rather than treating commit volume as a
+productivity measure. It presents:
 
-The dashboard provides real-time metrics and analytics for the Engineering Memory system:
+- an executive headline and summary;
+- overall attention level;
+- achievements and supported business impact;
+- risks and recommended actions;
+- decisions that may require management judgment;
+- watch items, confidence, evidence, and explicit limitations.
 
-- **📊 Dashboard Tab**: Visual executive dashboard with:
-  - Summary metrics (total commits, active authors, repositories, facts)
-  - Daily velocity breakdown (commits per day, authors per day)
-  - Top 5 contributors with progress bars
-  - Critical areas (most modified files) with risk assessment
-  - Stability index with risk level indicator
-  - Auto-refresh every 60 seconds
+Use the repository selector and a 7, 30, or 90-day period. Results are cached
+for 15 minutes per repository, period, and language. A manual refresh bypasses
+the cache. Weekly and monthly reports render the same structured briefing as a
+human-readable document and support text or print/PDF export.
 
-- **📋 Reports Tab**: Quick access to generated reports:
-  - Weekly reports (commits, top contributors, modified areas)
-  - Monthly reports (detailed analysis)
-  - Velocity metrics (development speed trends)
-  - Stability analysis (bug/feature ratio)
-
-- **💬 Chat Tab**: Original chat interface
-
-**API Endpoints**:
-
-```bash
-# Get summary metrics
-GET /api/metrics/dashboard
-
-# Get velocity metrics (commits/day analysis)
-GET /api/metrics/velocity?days=30
-
-# Get detailed reports
-GET /api/metrics/report?period=weekly
-
-# Get stability index
-GET /api/metrics/stability?repository=<key>
+```text
+GET /api/executive/briefing?days=30&repository=<key>&language=es
+GET /api/executive/briefing?days=7&language=en&refresh=true
 ```
 
-**Example**: View the dashboard at `http://127.0.0.1:8080/` and click the "📊 Dashboard" tab.
+The executive briefing and employee reports currently use specialized,
+deterministic database queries followed by batched LLM synthesis. They do not
+run the interactive chat search-tool planner or request additional searches
+during generation.
 
 Example chat request:
 
@@ -459,7 +511,10 @@ The system deliberately treats repository content as untrusted:
 - Employee reports use Git authorship but do not rank people or infer productivity.
 - Answers are instructed to cite repository, commit, file, and line references when available.
 
-Retrieval is still simple. It currently combines lexical matching, fact matching, recency fallback, risk/symptom boosts, and direct commit hash lookup. Embeddings and pgvector are planned but not implemented yet.
+Retrieval combines deterministic metadata/range tools, validated structured
+filters, lexical scoring over summaries and facts, recency fallback,
+risk/symptom boosts, and direct commit hash lookup. Embeddings and pgvector are
+planned but not implemented yet.
 
 ## License
 
@@ -476,4 +531,4 @@ Recommended next implementation steps:
 4. Add a persistent job queue for `repository.sync` and `commit.analyze`.
 5. Move persistence from SQLite to PostgreSQL.
 6. Add embeddings and hybrid retrieval with pgvector.
-7. Add streaming responses to the web chat.
+7. Add token-by-token model streaming to the web chat.
