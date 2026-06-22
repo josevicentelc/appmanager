@@ -110,6 +110,7 @@ export class OpenAiCompatibleProvider {
             "Distinguish facts, inferences, and hypotheses.",
             "Do not claim root cause without confirmation.",
             "When the question requests a specific number of changes, cover that many distinct items when the context contains enough candidates.",
+            "When the context includes RETRIEVAL COVERAGE or RANGE COVERAGE, respect it and mention material truncation or missing indexed knowledge when it affects the answer.",
             "When asked who made a change, use the Git author supplied in the context.",
             "Do not confuse the Git author with the Git committer or claim either one is the pull request author.",
             ...audienceInstructions(input.audience),

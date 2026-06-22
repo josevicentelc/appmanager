@@ -87,6 +87,28 @@ export async function listCommitsNewestFirst(
     .filter((line) => line.length > 0);
 }
 
+export async function listCommitsBetween(
+  repositoryPath: string,
+  fromExclusive: string,
+  toInclusive: string,
+  branch: string,
+  paths: string[] = []
+): Promise<string[]> {
+  await assertGitRepository(repositoryPath);
+  const fromHash = await resolveCommit(repositoryPath, fromExclusive);
+  const toHash = await resolveCommit(repositoryPath, toInclusive);
+  await resolveCommit(repositoryPath, branch);
+  const args = ["log", "--format=%H", "--reverse", "--ancestry-path", `${fromHash}..${toHash}`];
+  if (paths.length > 0) {
+    args.push("--", ...paths);
+  }
+  const result = await git(repositoryPath, args);
+  return result.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
 export async function readCommitSnapshot(
   repositoryPath: string,
   commitish: string,

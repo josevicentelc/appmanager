@@ -121,7 +121,7 @@ function renderEmployeeReport(item) {
   const report = item.report;
   return `<section class="employee-report">
     <h3>${escapeHtml(item.authorName)}</h3>
-    <div class="report-coverage">${item.evidenceCommits} ${item.evidenceCommits === 1 ? "cambio" : "cambios"} con conocimiento analizado${item.evidenceTruncated ? " · evidencia limitada a los 100 más recientes" : ""}</div>
+    <div class="report-coverage">${item.evidenceCommits} ${item.evidenceCommits === 1 ? "cambio" : "cambios"} con conocimiento analizado${item.evidenceTruncated ? " · cobertura parcial declarada" : ""}</div>
     <p>${escapeHtml(report.summary)}</p>
     ${report.repositories.map((repository) => `<section class="employee-repository"><h4>${escapeHtml(employeeRepositoryLabel(repository.repositoryKey))}</h4><p>${escapeHtml(repository.summary)}</p><div class="employee-focus-areas">${repository.focusAreas.map((area) => `<span>${escapeHtml(area)}</span>`).join("")}</div>${repository.tasks.map((task) => `<article class="report-item"><h5>${escapeHtml(task.title)}</h5><p>${escapeHtml(task.description)}</p><p><strong>Resultado:</strong> ${escapeHtml(task.outcome)}</p><details><summary>Evidencia y confianza (${Math.round(task.confidence * 100)}%)</summary>${task.evidence.map((evidence) => `<div class="report-evidence"><code>${escapeHtml(evidence.repositoryKey)} · ${escapeHtml(evidence.commitHash.slice(0, 8))}</code><span>${escapeHtml(evidence.reason)}</span></div>`).join("")}</details></article>`).join("")}</section>`).join("")}
     ${report.limitations.length ? `<details class="report-limitations"><summary>Limitaciones</summary><ul>${report.limitations.map((limitation) => `<li>${escapeHtml(limitation)}</li>`).join("")}</ul></details>` : ""}
@@ -398,12 +398,32 @@ function appendAssistantMessage(result) {
   node.innerHTML = [
     "<h2>Respuesta</h2>",
     `<pre>${escapeHtml(result.answer || "")}</pre>`,
+    renderCoverage(result.coverage),
     renderCandidates(candidates, result.audience || "developer"),
     result.context ? `<details><summary>Contexto recuperado</summary><pre>${escapeHtml(result.context)}</pre></details>` : ""
   ].join("");
 
   messages.appendChild(node);
   scrollMessagesToBottom();
+}
+
+function renderCoverage(coverage) {
+  if (!coverage) {
+    return "";
+  }
+  if (typeof coverage.commitsInRange === "number") {
+    const missing = coverage.missingKnowledgeCommits
+      ? ` · ${coverage.missingKnowledgeCommits} sin conocimiento indexado`
+      : "";
+    const truncated = coverage.truncated
+      ? ` · limitado a ${coverage.requestedMaxCandidates}`
+      : "";
+    return `<div class="retrieval-coverage">${coverage.returnedCandidates} incluidos de ${coverage.analyzedCommitsInRange} commits analizados; ${coverage.commitsInRange} commits en el rango${missing}${truncated}</div>`;
+  }
+  const truncated = coverage.truncated
+    ? ` · limitado a ${coverage.requestedMaxCandidates}`
+    : "";
+  return `<div class="retrieval-coverage">${coverage.returnedCandidates} de ${coverage.totalCandidates} commits analizados incluidos${truncated}</div>`;
 }
 
 function renderCandidates(candidates, audience) {

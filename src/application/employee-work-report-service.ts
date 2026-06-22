@@ -37,7 +37,7 @@ export interface CombinedEmployeeWorkReport {
 }
 
 export const maxAuthorsPerReport = 50;
-const maxEvidencePerAuthor = 100;
+const reportEvidenceBatchSize = 50;
 
 export async function listEmployeeAuthors(
   db: EngineeringMemoryDb,
@@ -152,9 +152,8 @@ export async function buildEmployeeWorkReports(
       emptyAuthors.push(authorName);
       continue;
     }
-    const reportEvidence = selectEvidenceAcrossRepositories(allAuthorEvidence, maxEvidencePerAuthor);
     const evidenceByRepository = new Map<string, EmployeeEvidenceRow[]>();
-    for (const row of reportEvidence) {
+    for (const row of allAuthorEvidence) {
       const repositoryEvidence = evidenceByRepository.get(row.repositoryKey) ?? [];
       repositoryEvidence.push(row);
       evidenceByRepository.set(row.repositoryKey, repositoryEvidence);
@@ -162,16 +161,20 @@ export async function buildEmployeeWorkReports(
     const partialReports: EmployeeWorkReport[] = [];
     const repositoryErrors: string[] = [];
     for (const [repositoryKey, repositoryEvidence] of evidenceByRepository) {
-      try {
-        partialReports.push(await generateRepositoryReportWithRetry(
-          provider,
-          authorName,
-          period,
-          options.language,
-          repositoryEvidence
-        ));
-      } catch (error) {
-        repositoryErrors.push(`${repositoryKey}: ${error instanceof Error ? error.message : String(error)}`);
+      const batches = chunkEvidence(repositoryEvidence, reportEvidenceBatchSize);
+      for (const [index, batch] of batches.entries()) {
+        try {
+          partialReports.push(await generateRepositoryReportWithRetry(
+            provider,
+            authorName,
+            period,
+            options.language,
+            batch
+          ));
+        } catch (error) {
+          const batchLabel = batches.length === 1 ? "" : ` lote ${index + 1}/${batches.length}`;
+          repositoryErrors.push(`${repositoryKey}${batchLabel}: ${error instanceof Error ? error.message : String(error)}`);
+        }
       }
     }
     if (partialReports.length > 0) {
@@ -179,7 +182,7 @@ export async function buildEmployeeWorkReports(
       reports.push({
         authorName,
         evidenceCommits: allAuthorEvidence.length,
-        evidenceTruncated: allAuthorEvidence.length > reportEvidence.length,
+        evidenceTruncated: false,
         report
       });
     } else {
@@ -237,6 +240,7 @@ function combineRepositoryReports(
   repositoryErrors: string[]
 ): EmployeeWorkReport {
   const repositoriesByKey = new Map<string, EmployeeWorkReport["repositories"][number]>();
+  const consolidationLimitations: string[] = [];
   for (const partial of partialReports) {
     for (const repository of partial.repositories) {
       const existing = repositoriesByKey.get(repository.repositoryKey);
@@ -249,7 +253,11 @@ function combineRepositoryReports(
       } else {
         existing.summary = `${existing.summary} ${repository.summary}`.trim();
         existing.focusAreas = [...new Set([...existing.focusAreas, ...repository.focusAreas])].slice(0, 8);
-        existing.tasks = [...existing.tasks, ...repository.tasks].slice(0, 12);
+        const mergedTasks = [...existing.tasks, ...repository.tasks];
+        if (mergedTasks.length > 12) {
+          consolidationLimitations.push(`El repositorio ${repository.repositoryKey} tuvo mas de 12 grupos de tareas; el informe final muestra los 12 primeros grupos consolidados.`);
+        }
+        existing.tasks = mergedTasks.slice(0, 12);
       }
     }
   }
@@ -258,37 +266,18 @@ function combineRepositoryReports(
     repositories: [...repositoriesByKey.values()],
     limitations: [...new Set([
       ...partialReports.flatMap((report) => report.limitations),
+      ...consolidationLimitations,
       ...repositoryErrors.map((error) => `No se pudo generar un bloque: ${error}`)
     ])].slice(0, 5)
   });
 }
 
-function selectEvidenceAcrossRepositories(
-  evidence: EmployeeEvidenceRow[],
-  limit: number
-): EmployeeEvidenceRow[] {
-  const queues = new Map<string, EmployeeEvidenceRow[]>();
-  for (const row of evidence) {
-    const queue = queues.get(row.repositoryKey) ?? [];
-    queue.push(row);
-    queues.set(row.repositoryKey, queue);
+function chunkEvidence(evidence: EmployeeEvidenceRow[], size: number): EmployeeEvidenceRow[][] {
+  const chunks: EmployeeEvidenceRow[][] = [];
+  for (let index = 0; index < evidence.length; index += size) {
+    chunks.push(evidence.slice(index, index + size));
   }
-  const selected: EmployeeEvidenceRow[] = [];
-  let index = 0;
-  while (selected.length < limit) {
-    let added = false;
-    for (const queue of queues.values()) {
-      const row = queue[index];
-      if (row !== undefined) {
-        selected.push(row);
-        added = true;
-        if (selected.length === limit) break;
-      }
-    }
-    if (!added) break;
-    index += 1;
-  }
-  return selected;
+  return chunks;
 }
 
 export function parseReportPeriod(from: string, to: string): {

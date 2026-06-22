@@ -37,11 +37,36 @@ export interface RetrievedCandidate {
   facts: RetrievedFact[];
 }
 
+export interface RetrievalCoverage {
+  totalCandidates: number;
+  returnedCandidates: number;
+  pageSize: number;
+  pagesRead: number;
+  truncated: boolean;
+  requestedMaxCandidates: number;
+}
+
+export interface RetrievedCandidateSet {
+  candidates: RetrievedCandidate[];
+  coverage: RetrievalCoverage;
+}
+
 export async function retrieveCandidates(
   db: EngineeringMemoryDb,
   question: string,
   options: { repositoryKey?: string | null; limit: number }
 ): Promise<RetrievedCandidate[]> {
+  const result = await retrieveCandidateSet(db, question, options.repositoryKey === undefined
+    ? { pageSize: options.limit, maxCandidates: options.limit }
+    : { repositoryKey: options.repositoryKey, pageSize: options.limit, maxCandidates: options.limit });
+  return result.candidates;
+}
+
+export async function retrieveCandidateSet(
+  db: EngineeringMemoryDb,
+  question: string,
+  options: { repositoryKey?: string | null; pageSize: number; maxCandidates: number }
+): Promise<RetrievedCandidateSet> {
   const terms = getSearchTerms(question);
 
   const rows = await db.all<Array<{
@@ -83,6 +108,8 @@ export async function retrieveCandidates(
     options.repositoryKey ?? null
   );
 
+  const pageSize = Math.max(1, options.pageSize);
+  const maxCandidates = Math.max(1, options.maxCandidates);
   const hashPrefixes = getCommitHashPrefixes(question);
   const hashMatchedRows = hashPrefixes.length > 0
     ? rows.filter((row) => hashPrefixes.some((prefix) => row.commit_hash.startsWith(prefix)))
@@ -90,24 +117,32 @@ export async function retrieveCandidates(
 
   const scored = hashMatchedRows.length > 0
     ? hashMatchedRows
-      .slice(0, options.limit)
       .map((row, index) => scoreRow(row, terms, 100 - index))
     : isRecentSummaryQuestion(question) || terms.length === 0
     ? rows
       .sort((a, b) => b.committed_at.localeCompare(a.committed_at))
-      .slice(0, options.limit)
-      .map((row, index) => scoreRow(row, terms, options.limit - index))
+      .map((row, index) => scoreRow(row, terms, rows.length - index))
     : rows
       .map((row) => scoreRow(row, terms))
       .filter((candidate) => candidate.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, options.limit);
+      .sort((a, b) => b.score - a.score);
 
-  for (const candidate of scored) {
+  const selected = scored.slice(0, maxCandidates);
+  for (const candidate of selected) {
     candidate.facts = await loadRelevantFacts(db, candidate, terms, question, 8);
   }
 
-  return scored;
+  return {
+    candidates: selected,
+    coverage: {
+      totalCandidates: scored.length,
+      returnedCandidates: selected.length,
+      pageSize,
+      pagesRead: Math.ceil(selected.length / pageSize),
+      truncated: scored.length > selected.length,
+      requestedMaxCandidates: maxCandidates
+    }
+  };
 }
 
 function scoreRow(

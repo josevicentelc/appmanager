@@ -1,7 +1,7 @@
 import type { AppConfig } from "../config.js";
 import type { EngineeringMemoryDb } from "../db/database.js";
 import { OpenAiCompatibleProvider } from "../ai/openai-compatible-provider.js";
-import type { ExecutiveBriefing } from "../ai/executive-briefing-schema.js";
+import { executiveBriefingSchema, type ExecutiveBriefing } from "../ai/executive-briefing-schema.js";
 
 interface EvidenceRow {
   repositoryKey: string;
@@ -23,6 +23,7 @@ export interface ExecutiveBriefingResult {
 }
 
 const cache = new Map<string, { expiresAt: number; value: ExecutiveBriefingResult }>();
+const executiveEvidenceBatchSize = 50;
 
 export async function buildExecutiveBriefing(
   db: EngineeringMemoryDb,
@@ -50,12 +51,17 @@ export async function buildExecutiveBriefing(
   }
 
   const provider = new OpenAiCompatibleProvider(config.ai);
-  const briefing = await provider.generateExecutiveBriefing({
-    periodDays: options.days,
-    repositoryKey: options.repositoryKey,
-    language: options.language,
-    evidence: rows
-  });
+  const evidenceBatches = chunkEvidence(rows, executiveEvidenceBatchSize);
+  const partialBriefings: ExecutiveBriefing[] = [];
+  for (const batch of evidenceBatches) {
+    partialBriefings.push(await provider.generateExecutiveBriefing({
+      periodDays: options.days,
+      repositoryKey: options.repositoryKey,
+      language: options.language,
+      evidence: batch
+    }));
+  }
+  const briefing = combineExecutiveBriefings(partialBriefings);
   const result: ExecutiveBriefingResult = { briefing, coverage, generatedAt: now.toISOString(), cached: false };
   cache.set(cacheKey, { expiresAt: Date.now() + 15 * 60_000, value: result });
   return result;
@@ -74,6 +80,43 @@ async function loadEvidence(db: EngineeringMemoryDb, days: number, repositoryKey
       AND (? IS NULL OR r.key = ?)
     GROUP BY ck.id
     ORDER BY c.committed_at DESC
-    LIMIT 80
   `, `-${days} days`, repositoryKey, repositoryKey);
+}
+
+function combineExecutiveBriefings(briefings: ExecutiveBriefing[]): ExecutiveBriefing {
+  if (briefings.length === 1) {
+    return briefings[0] as ExecutiveBriefing;
+  }
+  const achievements = briefings.flatMap((briefing) => briefing.achievements);
+  const risks = briefings.flatMap((briefing) => briefing.risks);
+  const decisions = briefings.flatMap((briefing) => briefing.decisions);
+  const watchItems = briefings.flatMap((briefing) => briefing.watchItems);
+  const limitations = [
+    ...briefings.flatMap((briefing) => briefing.limitations),
+    "La evidencia se proceso en lotes y el informe final consolida los elementos principales de cada seccion."
+  ];
+  return executiveBriefingSchema.parse({
+    headline: briefings[0]?.headline ?? "Resumen ejecutivo",
+    executiveSummary: briefings.map((briefing) => briefing.executiveSummary).join(" "),
+    overallAttention: strongestAttention(briefings.map((briefing) => briefing.overallAttention)),
+    achievements: achievements.slice(0, 5),
+    risks: risks.slice(0, 5),
+    decisions: decisions.slice(0, 5),
+    watchItems: watchItems.slice(0, 5),
+    limitations: [...new Set(limitations)].slice(0, 5)
+  });
+}
+
+function strongestAttention(values: ExecutiveBriefing["overallAttention"][]): ExecutiveBriefing["overallAttention"] {
+  if (values.includes("action")) return "action";
+  if (values.includes("watch")) return "watch";
+  return "normal";
+}
+
+function chunkEvidence<T>(evidence: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < evidence.length; index += size) {
+    chunks.push(evidence.slice(index, index + size));
+  }
+  return chunks;
 }

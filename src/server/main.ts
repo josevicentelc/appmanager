@@ -140,6 +140,7 @@ async function routeRequest(
       sendJson(response, 200, {
         answer: result.answer,
         audience: result.audience,
+        coverage: result.coverage,
         candidates: audience === "user"
           ? result.candidates.map((candidate) => ({
             summary: candidate.summary,
@@ -202,6 +203,7 @@ async function routeRequest(
         data: {
           answer: result.answer,
           audience: result.audience,
+          coverage: result.coverage,
           candidates: audience === "user"
             ? result.candidates.map((candidate) => ({
               summary: candidate.summary,

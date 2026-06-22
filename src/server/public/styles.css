@@ -252,6 +252,12 @@ select {
   line-height: 1.45;
 }
 
+.retrieval-coverage {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
 .candidates {
   display: grid;
   gap: 8px;
