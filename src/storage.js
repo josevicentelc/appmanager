@@ -42,6 +42,17 @@ export class FileStore {
     catch (error) { if (error.code === 'ENOENT') return []; throw error; }
   }
   async getAnalysis(repository, sha) { return readJson(path.join(this.commitDirectory(repository, sha), 'analysis.json'), null); }
+  async listAnalyses(repositories, limit = 100) {
+    const analyses = [];
+    for (const repository of repositories) {
+      const shas = await this.listCommitShas(repository);
+      for (const sha of shas) {
+        const analysis = await this.getAnalysis(repository, sha);
+        if (analysis) analyses.push(analysis);
+      }
+    }
+    return analyses.sort((a, b) => String(b.commitDate ?? '').localeCompare(String(a.commitDate ?? ''))).slice(0, limit);
+  }
   async listRepositoryStates(repositories) { return Promise.all(repositories.map((repository) => this.getState(repository))); }
   async getRepositoryProgress(repository, targetTotal = 0) {
     const commitsDirectory = path.join(this.repositoryDirectory(repository), 'commits');

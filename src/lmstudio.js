@@ -60,4 +60,43 @@ export class LMStudioClient {
     const body = await response.json();
     return extractJson(body.choices?.[0]?.message?.content ?? '');
   }
+  async chat({ model, messages }) {
+    if (!model) throw new Error('Selecciona un modelo de LM Studio en Configuración antes de iniciar un chat.');
+    const response = await fetch(`${this.baseUrl}/chat/completions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, messages, temperature: 0.3 })
+    });
+    if (!response.ok) throw new Error(`LM Studio ${response.status}: ${await response.text()}`);
+    const body = await response.json();
+    const content = body.choices?.[0]?.message?.content;
+    if (!content) throw new Error('LM Studio no devolvió contenido para el chat.');
+    return content;
+  }
+  async streamChat({ model, messages, onDelta }) {
+    if (!model) throw new Error('Selecciona un modelo de LM Studio en Configuración antes de iniciar un chat.');
+    const response = await fetch(`${this.baseUrl}/chat/completions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, messages, temperature: 0.3, stream: true })
+    });
+    if (!response.ok) throw new Error(`LM Studio ${response.status}: ${await response.text()}`);
+    if (!response.body) throw new Error('LM Studio no inició un flujo de respuesta.');
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let pending = '';
+    const consume = (event) => {
+      const data = event.split(/\r?\n/).filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trim()).join('\n');
+      if (!data || data === '[DONE]') return;
+      const delta = JSON.parse(data).choices?.[0]?.delta?.content;
+      if (delta) onDelta(delta);
+    };
+    while (true) {
+      const { value, done } = await reader.read();
+      pending += decoder.decode(value || new Uint8Array(), { stream: !done });
+      const events = pending.split(/\r?\n\r?\n/);
+      pending = events.pop();
+      events.forEach(consume);
+      if (done) break;
+    }
+    if (pending.trim()) consume(pending);
+  }
 }

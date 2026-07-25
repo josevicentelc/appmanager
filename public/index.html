@@ -1,6 +1,57 @@
 <!doctype html>
-<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AppManager</title><link rel="stylesheet" href="/app.css"></head>
-<body><main><header><div><p class="eyebrow">CONOCIMIENTO DE REPOSITORIOS</p><h1>AppManager</h1><p>Sincroniza y digiere commits con GitHub y LM Studio.</p></div><button id="syncButton">Sincronizar ahora</button></header>
-<section class="card"><h2>Estado</h2><p id="runStatus">Cargando…</p><p id="syncActivity" class="activity">Esperando estado de sincronización…</p><div id="repositories" class="repositories"></div></section>
-<section class="card"><h2>Configuración</h2><form id="configForm"><label>Importar desde<input id="importSince" type="date" required></label><label>Modelo LM Studio<select id="model"><option value="">Selecciona un modelo</option></select></label><label>Frecuencia (minutos)<input id="interval" type="number" min="1" max="1440" required></label><label>Idioma<select id="language"><option value="es">Español</option><option value="en">English</option></select></label><fieldset><legend>Repositorios a sincronizar</legend><p class="muted">Disponibles para el token actual de GitHub.</p><div id="repositoryChoices" class="repository-choices"></div></fieldset><button type="submit">Guardar configuración</button><span id="formStatus"></span></form></section>
-</main><script src="/app.js"></script></body></html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0b0d12">
+  <title>AppManager</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="#" aria-label="AppManager, inicio">
+        <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 9h8M8 13h5m-7 7 3.2-3H18a3 3 0 0 0 3-3V6a3 3 0 0 0-3-3H6a3 3 0 0 0-3 3v8a3 3 0 0 0 3 3v3Z"/></svg></span>
+        <span><strong>AppManager</strong><small>Repository Intelligence</small></span>
+      </a>
+      <nav class="tabs" aria-label="Secciones">
+        <button class="tab active" data-tab="chat"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 10h8M8 14h5M5 20l2.5-3H18a3 3 0 0 0 3-3V6a3 3 0 0 0-3-3H6a3 3 0 0 0-3 3v8a3 3 0 0 0 3 3v3Z"/></svg>Chat</button>
+        <button class="tab" data-tab="settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg>Configuración</button>
+      </nav>
+    </header>
+
+    <section id="chatPanel" class="panel chat-panel">
+      <div class="chat-layout">
+        <aside class="chat-sidebar">
+          <div class="sidebar-heading"><span class="section-icon"><svg viewBox="0 0 24 24"><path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1m0-12.8-2.1 2.1m-8.6 8.6-2.1 2.1"/><circle cx="12" cy="12" r="4"/></svg></span><div><h2>Asistente</h2><p>Contexto local</p></div></div>
+          <div class="connection"><span class="status-dot"></span><span>LM Studio</span><strong>Local</strong></div>
+          <label class="control-label" for="chatMode">Tipo de respuesta</label>
+          <div class="select-wrap"><select id="chatMode"><option value="developer">Developer</option><option value="executive">Ejecutivo</option></select><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 10 4 4 4-4"/></svg></div>
+          <div class="context-card"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6.5 12 3l8 3.5-8 3.5-8-3.5Z"/><path d="m4 11 8 3.5 8-3.5M4 15.5 12 19l8-3.5"/></svg><p id="chatContext">Cargando contexto local…</p></div>
+          <button id="newChatButton" class="secondary full-width"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Nueva conversación</button>
+          <p class="privacy-note"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10V8a5 5 0 0 1 10 0v2M5 10h14v11H5z"/></svg>Tus datos permanecen en local</p>
+        </aside>
+
+        <section class="chat-card">
+          <div class="chat-header"><div><h1>Consulta tus repositorios</h1><p>Analiza cambios, decisiones y evolución del software.</p></div><span class="live-badge"><i></i>Disponible</span></div>
+          <div id="messages" class="messages" aria-live="polite" aria-busy="false"></div>
+          <div class="composer-area">
+            <form id="chatForm" class="chat-form">
+              <textarea id="chatQuestion" rows="1" placeholder="Pregunta sobre tus repositorios…" aria-label="Mensaje" required></textarea>
+              <button id="sendButton" type="submit" aria-label="Enviar mensaje"><span>Enviar</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 14-7-4 14-3-6-7-1Z"/><path d="m12 13 7-8"/></svg></button>
+            </form>
+            <p class="composer-hint"><kbd>Enter</kbd> para enviar <span>·</span> <kbd>Shift</kbd> + <kbd>Enter</kbd> para nueva línea</p>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section id="settingsPanel" class="panel" hidden>
+      <div class="settings-header"><div><p class="eyebrow">FUENTES DE CONOCIMIENTO</p><h1>Configuración</h1><p>Gestiona los repositorios y el modelo que alimentan el chat.</p></div><button id="syncButton"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7h-5V2M4 17h5v5M20 7a8 8 0 0 0-13.7-2.7L4 7m16 10-2.3 2.7A8 8 0 0 1 4 17"/></svg>Sincronizar ahora</button></div>
+      <section class="card"><h2>Estado de sincronización</h2><p id="runStatus">Cargando…</p><p id="syncActivity" class="activity">Esperando estado de sincronización…</p><div id="repositories" class="repositories"></div></section>
+      <section class="card"><h2>Preferencias</h2><form id="configForm"><label>Importar desde<input id="importSince" type="date" required></label><label>Modelo LM Studio<select id="model"><option value="">Selecciona un modelo</option></select></label><label>Frecuencia (minutos)<input id="interval" type="number" min="1" max="1440" required></label><label>Idioma<select id="language"><option value="es">Español</option><option value="en">English</option></select></label><fieldset><legend>Repositorios a sincronizar</legend><p class="muted">Disponibles para el token actual de GitHub.</p><div id="repositoryChoices" class="repository-choices"></div></fieldset><button type="submit">Guardar configuración</button><span id="formStatus"></span></form></section>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,36 +1,212 @@
 const $ = (selector) => document.querySelector(selector);
 let config;
-async function api(path, options) { const response = await fetch(path, options); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Error inesperado'); return data; }
-function message(text, error = false) { $('#formStatus').textContent = text; $('#formStatus').className = error ? 'error' : 'success'; }
-function escapeHtml(value) { const node = document.createElement('span'); node.textContent = value; return node.innerHTML; }
+let conversation = [];
+let chatBusy = false;
+
+async function api(path, options) {
+  const response = await fetch(path, options);
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || 'Error inesperado');
+  return data;
+}
+
+async function streamChat(payload, onDelta) {
+  const response = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  if (!response.ok) {
+    const data = await response.json();
+    throw new Error(data.error || 'Error inesperado');
+  }
+  if (!response.body) throw new Error('El navegador no pudo recibir el flujo de respuesta.');
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let pending = '';
+  const consume = (event) => {
+    const type = event.match(/^event:\s*(.+)$/m)?.[1] || 'message';
+    const data = event.match(/^data:\s*(.+)$/m)?.[1];
+    if (!data) return;
+    const value = JSON.parse(data);
+    if (type === 'delta') onDelta(value.text);
+    if (type === 'error') throw new Error(value.error || 'El flujo del modelo falló.');
+  };
+  while (true) {
+    const { value, done } = await reader.read();
+    pending += decoder.decode(value || new Uint8Array(), { stream: !done });
+    const events = pending.split(/\r?\n\r?\n/);
+    pending = events.pop();
+    events.forEach(consume);
+    if (done) break;
+  }
+  if (pending.trim()) consume(pending);
+}
+
+function message(text, error = false) {
+  $('#formStatus').textContent = text;
+  $('#formStatus').className = error ? 'error' : 'success';
+}
+
+function escapeHtml(value) {
+  const node = document.createElement('span');
+  node.textContent = value;
+  return node.innerHTML;
+}
+
+function formatAssistantMessage(value) {
+  const inline = (text) => escapeHtml(text).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/`([^`\n]+)`/g, '<code>$1</code>');
+  return value.split('```').map((segment, index) => {
+    if (index % 2) return `<pre><code>${escapeHtml(segment.replace(/^[\w+-]+\r?\n/, ''))}</code></pre>`;
+    const output = [];
+    let list = null;
+    const closeList = () => { if (list) { output.push(`</${list}>`); list = null; } };
+    for (const line of segment.split(/\r?\n/)) {
+      const bullet = line.match(/^\s*[-*]\s+(.+)/);
+      const numbered = line.match(/^\s*\d+\.\s+(.+)/);
+      if (bullet || numbered) {
+        const desired = bullet ? 'ul' : 'ol';
+        if (list !== desired) { closeList(); list = desired; output.push(`<${list}>`); }
+        output.push(`<li>${inline((bullet || numbered)[1])}</li>`);
+      } else {
+        closeList();
+        const heading = line.match(/^\s*#{1,3}\s+(.+)/);
+        if (heading) output.push(`<h3>${inline(heading[1])}</h3>`);
+        else if (line.trim()) output.push(`<p>${inline(line)}</p>`);
+      }
+    }
+    closeList();
+    return output.join('');
+  }).join('');
+}
+
+const assistantIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 9h8M8 13h5m-7 7 3.2-3H18a3 3 0 0 0 3-3V6a3 3 0 0 0-3-3H6a3 3 0 0 0-3 3v8a3 3 0 0 0 3 3v3Z"/></svg>';
+const userIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4.5 21a7.5 7.5 0 0 1 15 0"/></svg>';
+
+function emptyChatHtml() {
+  return `<div class="empty-chat"><div class="empty-orb">${assistantIcon}</div><h2>Tu código tiene una historia.<br>Pregúntale.</h2><p>Explora decisiones técnicas, cambios recientes y riesgos usando el conocimiento de tus repositorios.</p><div class="suggestions"><button class="suggestion" data-prompt="Resume los cambios más importantes de los últimos commits"><span>Resumen</span>¿Qué ha cambiado recientemente?</button><button class="suggestion" data-prompt="¿Qué riesgos técnicos o tareas pendientes detectas?"><span>Riesgos</span>Detecta posibles problemas</button><button class="suggestion" data-prompt="Explica la evolución técnica reciente de los repositorios"><span>Evolución</span>Comprende las decisiones</button></div></div>`;
+}
+
+function renderMessages() {
+  const messages = $('#messages');
+  if (!conversation.length) {
+    messages.innerHTML = emptyChatHtml();
+    return;
+  }
+  messages.innerHTML = conversation.map((item, index) => {
+    const waiting = item.role === 'assistant' && !item.content && chatBusy;
+    const streaming = item.role === 'assistant' && chatBusy && index === conversation.length - 1 && item.content;
+    const content = waiting ? '<span class="typing" aria-label="AppManager está escribiendo"><i></i><i></i><i></i></span>' : item.role === 'assistant' ? formatAssistantMessage(item.content) : escapeHtml(item.content);
+    const mode = item.role === 'assistant' ? ($('#chatMode').value === 'executive' ? 'Ejecutivo' : 'Developer') : '';
+    return `<div class="message-row ${item.role}${streaming ? ' streaming' : ''}"><div class="avatar">${item.role === 'user' ? userIcon : assistantIcon}</div><div class="message-content"><div class="message-meta">${item.role === 'user' ? 'Tú' : 'AppManager'}<span>${mode}</span></div><div class="message-body">${content}</div></div></div>`;
+  }).join('');
+  messages.scrollTop = messages.scrollHeight;
+}
+
+function setChatBusy(busy) {
+  chatBusy = busy;
+  $('#messages').setAttribute('aria-busy', String(busy));
+  $('#sendButton').disabled = busy;
+  $('#chatQuestion').disabled = busy;
+  $('#sendButton').setAttribute('aria-label', busy ? 'Generando respuesta' : 'Enviar mensaje');
+}
+
 async function load() {
-  config = await api('/api/config'); const [models, githubRepositories] = await Promise.all([api('/api/models'), api('/api/github-repositories')]);
-  $('#importSince').value = config.importSince; $('#interval').value = config.syncIntervalMinutes; $('#language').value = config.language;
-  $('#model').innerHTML = '<option value="">Selecciona un modelo</option>' + models.models.map((id) => `<option ${id === config.model ? 'selected' : ''} value="${id}">${id}</option>`).join('');
+  config = await api('/api/config');
+  const [models, githubRepositories] = await Promise.all([api('/api/models'), api('/api/github-repositories')]);
+  $('#importSince').value = config.importSince;
+  $('#interval').value = config.syncIntervalMinutes;
+  $('#language').value = config.language;
+  $('#model').innerHTML = '<option value="">Selecciona un modelo</option>' + models.models.map((id) => `<option ${id === config.model ? 'selected' : ''} value="${escapeHtml(id)}">${escapeHtml(id)}</option>`).join('');
   $('#repositoryChoices').innerHTML = githubRepositories.repositories.map((repo) => `<label class="repository-choice"><input type="checkbox" value="${escapeHtml(repo.fullName)}" ${config.repositories.includes(repo.fullName) ? 'checked' : ''}><span><strong>${escapeHtml(repo.fullName)}</strong><small>${repo.private ? 'Privado' : 'Público'} · ${escapeHtml(repo.description || 'Sin descripción')}</small></span></label>`).join('') || '<p>No hay repositorios disponibles para este token.</p>';
+  $('#chatContext').textContent = config.repositories.length ? `${config.repositories.length} repositorio(s) seleccionado(s) como fuente de conocimiento.` : 'Selecciona y sincroniza repositorios en Configuración para alimentar el chat.';
   await refreshStatus();
 }
+
 async function refreshStatus() {
-  const status = await api('/api/status'); const running = status.sync.running;
+  const status = await api('/api/status');
+  const running = status.sync.running;
   $('#runStatus').textContent = running ? `Procesando ${status.sync.current?.repository ?? ''}…` : status.sync.lastRun ? `Última ejecución: ${new Date(status.sync.lastRun.completedAt).toLocaleString()}` : 'Todavía no se ha ejecutado ninguna sincronización.';
   const current = status.sync.current;
-  const activityText = {
-    checking_repository: 'GitHub: comprobando acceso al repositorio.',
-    listing_commits: 'GitHub: consultando el historial de commits.',
-    listing_tags: 'GitHub: consultando tags y versiones publicadas.',
-    downloading_commit: 'GitHub: descargando metadatos y diff del commit.',
-    digesting_commit: 'LM Studio: analizando el contexto y diff del commit.',
-    saving_analysis: 'Almacenamiento local: guardando el análisis estructurado.',
-    skipping_existing: 'Almacenamiento local: el commit ya estaba analizado; se omite.'
-  };
+  const activityText = { checking_repository: 'GitHub: comprobando acceso al repositorio.', listing_commits: 'GitHub: consultando el historial de commits.', listing_tags: 'GitHub: consultando tags y versiones publicadas.', downloading_commit: 'GitHub: descargando metadatos y diff del commit.', digesting_commit: 'LM Studio: analizando el contexto y diff del commit.', saving_analysis: 'Almacenamiento local: guardando el análisis estructurado.', skipping_existing: 'Almacenamiento local: el commit ya estaba analizado; se omite.' };
   $('#syncActivity').textContent = current ? `${activityText[current.stage] || 'Sincronizando.'} ${current.position ? `(${current.position}/${current.total}) ` : ''}${current.sha ? `${current.sha.slice(0, 12)}${current.message ? ` — ${current.message}` : ''}` : ''}` : 'No hay ninguna sincronización activa.';
   $('#syncButton').disabled = running;
   $('#repositories').innerHTML = status.repositories.map((repo) => {
-    const active = status.sync.current?.repository === repo.repository; const progress = repo.progress; const state = repo.state;
-    const description = active ? ($('#syncActivity').textContent) : state.lastError || (state.lastCheckedAt ? `Comprobado: ${new Date(state.lastCheckedAt).toLocaleString()}` : 'Pendiente de primera sincronización');
+    const active = status.sync.current?.repository === repo.repository;
+    const { progress, state } = repo;
+    const description = active ? $('#syncActivity').textContent : state.lastError || (state.lastCheckedAt ? `Comprobado: ${new Date(state.lastCheckedAt).toLocaleString()}` : 'Pendiente de primera sincronización');
     return `<article><strong>${escapeHtml(repo.repository)}</strong><span>${progress.completed}/${progress.total} analizados · ${progress.pending} pendientes · ${progress.analyzing} en análisis</span><div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress.percentage}"><i style="width:${progress.percentage}%"></i></div><small>${progress.percentage}% · ${escapeHtml(description)}</small></article>`;
   }).join('');
 }
-$('#configForm').addEventListener('submit', async (event) => { event.preventDefault(); try { config = await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ importSince: $('#importSince').value, model: $('#model').value, syncIntervalMinutes: Number($('#interval').value), language: $('#language').value, repositories: [...document.querySelectorAll('#repositoryChoices input:checked')].map((input) => input.value) }) }); message(`${config.repositories.length} repositorio(s) guardados.`); await refreshStatus(); } catch (error) { message(error.message, true); } });
-$('#syncButton').addEventListener('click', async () => { try { const result = await api('/api/sync', { method: 'POST' }); message(`Sincronización terminada: ${result.repositories.reduce((total, repo) => total + repo.processed, 0)} commits procesados.`); await refreshStatus(); } catch (error) { message(error.message, true); } });
-load().catch((error) => message(error.message, true)); setInterval(() => refreshStatus().catch(() => {}), 5000);
+
+document.querySelectorAll('.tab').forEach((tab) => tab.addEventListener('click', () => {
+  const settings = tab.dataset.tab === 'settings';
+  $('#chatPanel').hidden = settings;
+  $('#settingsPanel').hidden = !settings;
+  document.querySelectorAll('.tab').forEach((button) => button.classList.toggle('active', button === tab));
+}));
+
+$('#newChatButton').addEventListener('click', () => { conversation = []; renderMessages(); $('#chatQuestion').focus(); });
+
+$('#messages').addEventListener('click', (event) => {
+  const suggestion = event.target.closest('.suggestion');
+  if (!suggestion) return;
+  $('#chatQuestion').value = suggestion.dataset.prompt;
+  $('#chatQuestion').dispatchEvent(new Event('input'));
+  $('#chatQuestion').focus();
+});
+
+$('#chatQuestion').addEventListener('input', (event) => {
+  event.target.style.height = 'auto';
+  event.target.style.height = `${Math.min(event.target.scrollHeight, 128)}px`;
+});
+
+$('#chatQuestion').addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    if (!chatBusy && event.currentTarget.value.trim()) $('#chatForm').requestSubmit();
+  }
+});
+
+$('#chatForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const question = $('#chatQuestion').value.trim();
+  if (!question) return;
+  const history = conversation.slice();
+  conversation.push({ role: 'user', content: question });
+  $('#chatQuestion').value = '';
+  $('#chatQuestion').style.height = 'auto';
+  setChatBusy(true);
+  conversation.push({ role: 'assistant', content: '' });
+  renderMessages();
+  try {
+    await streamChat({ question, history, mode: $('#chatMode').value }, (text) => {
+      conversation[conversation.length - 1].content += text;
+      renderMessages();
+    });
+  } catch (error) {
+    conversation[conversation.length - 1].content = `No he podido responder: ${error.message}`;
+  } finally {
+    setChatBusy(false);
+    renderMessages();
+    $('#chatQuestion').focus();
+  }
+});
+
+$('#configForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  try {
+    config = await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ importSince: $('#importSince').value, model: $('#model').value, syncIntervalMinutes: Number($('#interval').value), language: $('#language').value, repositories: [...document.querySelectorAll('#repositoryChoices input:checked')].map((input) => input.value) }) });
+    message(`${config.repositories.length} repositorio(s) guardados.`);
+    $('#chatContext').textContent = config.repositories.length ? `${config.repositories.length} repositorio(s) seleccionado(s) como fuente de conocimiento.` : 'Selecciona y sincroniza repositorios en Configuración para alimentar el chat.';
+    await refreshStatus();
+  } catch (error) { message(error.message, true); }
+});
+
+$('#syncButton').addEventListener('click', async () => {
+  try {
+    const result = await api('/api/sync', { method: 'POST' });
+    message(`Sincronización terminada: ${result.repositories.reduce((total, repo) => total + repo.processed, 0)} commits procesados.`);
+    await refreshStatus();
+  } catch (error) { message(error.message, true); }
+});
+
+renderMessages();
+load().catch((error) => message(error.message, true));
+setInterval(() => refreshStatus().catch(() => {}), 5000);

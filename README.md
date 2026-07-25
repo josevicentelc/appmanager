@@ -15,8 +15,15 @@ No usa base de datos ni envía información a servicios de IA externos.
 - Conservación de commits, diffs y análisis en archivos locales.
 - Detección de tags Git y versiones SemVer, como `v-1.1.0`.
 - Reexploración automática del histórico cuando se modifica la fecha inicial de importación.
+- Chat local sobre el conocimiento sincronizado, con respuestas en streaming.
 
-Pendiente para una fase posterior: chat RAG con los modos Ejecutivo y Developer.
+## Chat de conocimiento
+
+La pantalla principal es un chat con LM Studio. Usa los análisis de los últimos 100 commits sincronizados de los repositorios seleccionados como contexto local y conserva el historial de la conversación en el navegador.
+
+El selector **Developer** prioriza archivos, decisiones y riesgos técnicos; **Ejecutivo** prioriza impacto, objetivos y evolución. Las respuestas se muestran progresivamente conforme LM Studio las genera y admiten formato Markdown básico, incluidas listas y bloques de código.
+
+La interfaz incluye preguntas de ejemplo, indicador de generación, editor ajustable y atajos: **Enter** envía el mensaje y **Shift + Enter** inserta una nueva línea. La selección de repositorios, el modelo y la sincronización están en la pestaña **Configuración**.
 
 ## Requisitos
 
@@ -75,6 +82,12 @@ Los tokens fine-grained están asociados a un único propietario u organización
 Si Node informa `unable to verify the first certificate`, no se debe desactivar la validación TLS. Exporta la CA de la red/proxy en formato PEM y declara su ruta mediante `GITHUB_CA_CERT_FILE`.
 
 ## Uso de la interfaz
+
+### Chat
+
+- Es la pantalla de inicio y consulta exclusivamente el contexto local de commits ya analizados.
+- **Nueva conversación** elimina el historial de la sesión en el navegador; no modifica ningún dato sincronizado.
+- Si todavía no hay commits analizados, el modelo lo indicará. Selecciona repositorios y ejecuta una sincronización desde **Configuración** para aportar contexto.
 
 ### Configuración
 
@@ -180,6 +193,7 @@ npm run backfill:tags -- owner/repo  # añade tags Git a análisis existentes
 | `GET` | `/api/github-repositories` | Lista los repositorios visibles para el token. |
 | `GET` | `/api/status` | Estado global y progreso por repositorio. |
 | `POST` | `/api/sync` | Inicia una sincronización manual. |
+| `POST` | `/api/chat` | Genera una respuesta de chat en streaming (SSE) usando los análisis locales como contexto. |
 
 ## Seguridad
 

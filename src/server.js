@@ -20,6 +20,14 @@ const publicDirectory = path.join(root, 'public');
 function sendJson(response, status, value) { response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); response.end(JSON.stringify(value)); }
 async function body(request) { let text = ''; for await (const chunk of request) text += chunk; return text ? JSON.parse(text) : {}; }
 function publicConfig() { return { ...appConfig, lmStudioBaseUrl: environment.lmStudioBaseUrl, dataDirectory: environment.dataDirectory }; }
+function chatSystemPrompt(mode, language, analyses) {
+  const languageName = language === 'en' ? 'English' : 'Español';
+  const focus = mode === 'executive'
+    ? 'Explica impacto, objetivos, evolución y riesgos en términos claros. Evita detalles de implementación salvo que sean necesarios.'
+    : 'Incluye detalles técnicos, archivos afectados, decisiones, riesgos y posibles seguimientos cuando aparezcan en el contexto.';
+  const context = analyses.length ? JSON.stringify(analyses).slice(0, 90_000) : 'No hay análisis de commits sincronizados todavía.';
+  return `Eres AppManager, un asistente sobre el conocimiento local de repositorios. Responde en ${languageName}. ${focus} Usa únicamente el contexto de commits suministrado para afirmar hechos sobre los repositorios. Si el contexto no basta, indícalo con claridad.\n\nContexto local de commits:\n${context}`;
+}
 
 const server = http.createServer(async (request, response) => {
   try {
@@ -45,6 +53,22 @@ const server = http.createServer(async (request, response) => {
       return sendJson(response, 200, { sync: sync.status(), repositories });
     }
     if (request.method === 'POST' && url.pathname === '/api/sync') { const result = await sync.run(); return sendJson(response, result.started ? 202 : 409, result); }
+    if (request.method === 'POST' && url.pathname === '/api/chat') {
+      const input = await body(request);
+      const question = String(input.question ?? '').trim();
+      if (!question) return sendJson(response, 400, { error: 'Escribe una pregunta para el chat.' });
+      if (!appConfig.model) return sendJson(response, 400, { error: 'Selecciona un modelo de LM Studio en Configuración antes de iniciar un chat.' });
+      const mode = input.mode === 'executive' ? 'executive' : 'developer';
+      const history = Array.isArray(input.history) ? input.history.slice(-12).map((item) => ({ role: item.role === 'assistant' ? 'assistant' : 'user', content: String(item.content ?? '').slice(0, 8000) })).filter((item) => item.content.trim()) : [];
+      const analyses = await store.listAnalyses(appConfig.repositories);
+      response.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+      const event = (name, value) => response.write(`event: ${name}\ndata: ${JSON.stringify(value)}\n\n`);
+      try {
+        await lmStudio.streamChat({ model: appConfig.model, messages: [{ role: 'system', content: chatSystemPrompt(mode, appConfig.language, analyses) }, ...history, { role: 'user', content: question }], onDelta: (text) => event('delta', { text }) });
+        event('done', { sources: analyses.length });
+      } catch (error) { event('error', { error: error.message }); }
+      return response.end();
+    }
     if (request.method === 'GET' && url.pathname === '/api/health') return sendJson(response, 200, { ok: true });
     if (request.method === 'GET') {
       const file = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
