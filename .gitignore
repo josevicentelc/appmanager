@@ -1,17 +1,13 @@
+# Secretos y configuración local
+.env
+
+# Histórico descargado, análisis y estado local de la aplicación
+data/
+
+# Dependencias y resultados de compilación
 node_modules/
 dist/
-.env
-.env.*
-!.env.example
-data/
+coverage/
+
+# Archivos de diagnóstico
 *.log
-
-# Local application state and machine-specific repository paths.
-config/application.yaml
-config/repositories.yaml
-config/runtime-settings.json
-config/runtime-settings.json.tmp
-.dependencygraph/
-
-# Local Git fixture; tests create an isolated repository at runtime.
-fixtures/spike-repo/
