@@ -60,23 +60,23 @@ export class LMStudioClient {
     const body = await response.json();
     return extractJson(body.choices?.[0]?.message?.content ?? '');
   }
-  async chat({ model, messages }) {
-    if (!model) throw new Error('Selecciona un modelo de LM Studio en Configuración antes de iniciar un chat.');
+  async plan({ model, messages, tools }) {
+    if (!model) throw new Error('Select an LM Studio model before starting a chat.');
     const response = await fetch(`${this.baseUrl}/chat/completions`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, messages, temperature: 0.3 })
+      body: JSON.stringify({ model, messages, tools, tool_choice: 'auto', temperature: 0.1 })
     });
     if (!response.ok) throw new Error(`LM Studio ${response.status}: ${await response.text()}`);
     const body = await response.json();
-    const content = body.choices?.[0]?.message?.content;
-    if (!content) throw new Error('LM Studio no devolvió contenido para el chat.');
-    return content;
+    const message = body.choices?.[0]?.message;
+    if (!message) throw new Error('LM Studio did not return a planning message.');
+    return { ...message, _debug: { finishReason: body.choices?.[0]?.finish_reason, usage: body.usage } };
   }
-  async streamChat({ model, messages, onDelta }) {
+  async streamChat({ model, messages, onDelta, tools, toolChoice }) {
     if (!model) throw new Error('Selecciona un modelo de LM Studio en Configuración antes de iniciar un chat.');
     const response = await fetch(`${this.baseUrl}/chat/completions`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, messages, temperature: 0.3, stream: true })
+      body: JSON.stringify({ model, messages, temperature: 0.3, stream: true, ...(tools?.length ? { tools, tool_choice: toolChoice ?? 'auto' } : {}) })
     });
     if (!response.ok) throw new Error(`LM Studio ${response.status}: ${await response.text()}`);
     if (!response.body) throw new Error('LM Studio no inició un flujo de respuesta.');

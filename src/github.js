@@ -47,4 +47,8 @@ export class GitHubClient {
   }
   async getCommit(repository, sha) { return (await this.request(`/repos/${repository}/commits/${sha}`)).json(); }
   async getCommitDiff(repository, sha) { return (await this.request(`/repos/${repository}/commits/${sha}`, 'application/vnd.github.diff')).text(); }
+  async getFileContent(repository, sha, filePath) {
+    const encodedPath = filePath.split('/').map(encodeURIComponent).join('/');
+    return (await this.request(`/repos/${repository}/contents/${encodedPath}?ref=${encodeURIComponent(sha)}`, 'application/vnd.github.raw+json')).text();
+  }
 }

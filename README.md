@@ -131,6 +131,7 @@ data/
         <sha>/
           github-raw.json
           diff.patch
+          diff-index.json
           analysis.json
           status.json
 ```
@@ -139,6 +140,7 @@ data/
 - `state.json`: estado de sincronización del repositorio, última comprobación y métricas.
 - `github-raw.json`: respuesta original de la API GitHub.
 - `diff.patch`: diff completo del commit.
+- `diff-index.json`: archivos, hunks, rangos y offsets para recuperar fragmentos del diff sin inyectarlo completo.
 - `analysis.json`: resumen estructurado generado por el modelo.
 - `status.json`: estado de digestión, intentos y último error.
 
@@ -180,8 +182,35 @@ npm run backfill:tags -- propietario/repositorio
 npm start                         # inicia la aplicación
 npm run dev                       # inicia Node en modo watch
 npm run check                     # valida sintaxis del servidor
+npm test                          # ejecuta las pruebas automatizadas
 npm run backfill:tags -- owner/repo  # añade tags Git a análisis existentes
 ```
+
+## Recuperacion de conocimiento en el chat
+
+El chat no inyecta el historico completo en cada consulta. Primero recupera hasta seis analisis relevantes por coincidencia lexical sobre mensaje, resumen, archivos, cambios, riesgos y etiquetas. El modelo recibe ese contexto compacto y herramientas para buscar y leer analisis, buscar dentro de los diffs, recuperar hunks completos y leer un rango acotado del archivo en el commit o en su primer padre.
+
+Los indices de diff se generan al sincronizar. Para datos existentes se crean automaticamente la primera vez que una busqueda necesita el `diff.patch`, por lo que no es necesario repetir la sincronizacion.
+
+La busqueda de diffs devuelve metadatos de coincidencia y carga automaticamente el hunk principal completo, hasta el presupuesto de seguridad. Los previews parciales no se entregan como codigo utilizable, evitando que el modelo los confunda con una funcion completa.
+
+Las llamadas a herramientas se validan en el servidor, solo acceden a repositorios seleccionados y estan limitadas a cuatro rondas y cuatro llamadas por ronda. Las rutas, SHA, fechas, resultados, hunks y rangos de lineas estan acotados. Los resultados son datos locales no confiables, nunca instrucciones. Las respuestas deben citar los analisis como `[owner/repo@sha-corto]` y el codigo como `[owner/repo@sha-corto:ruta:hunk-o-lineas]`.
+
+Las lecturas largas de hunks y archivos son paginadas. Cada resultado indica `truncated` y `nextStartLine`; cuando se solicita contenido completo, el agente debe continuar mientras exista una pagina siguiente o hasta localizar el final de la funcion.
+
+### Modo de depuracion
+
+El chat incluye un interruptor **Modo depuracion**. Cuando esta activo, el servidor envia eventos de traza junto a la respuesta SSE y la interfaz muestra:
+
+- fuentes elegidas para el contexto inicial;
+- cada ronda de planificacion y su duracion;
+- herramientas solicitadas por el modelo y sus argumentos;
+- numero de resultados, fuentes, fechas, truncamientos y continuaciones;
+- momento de inicio y fin de la generacion final.
+
+La traza no incluye el token de GitHub, el prompt del sistema, el historial completo ni cuerpos grandes de codigo. Se conserva en pantalla hasta iniciar otra consulta o una nueva conversacion.
+
+Para una recuperacion semantica basada en embeddings se requeriria añadir un modelo de embeddings y un indice vectorial local; esta version usa busqueda lexical determinista para mantener el MVP sin dependencias ni base de datos.
 
 ## API local
 
