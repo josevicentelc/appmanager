@@ -60,6 +60,16 @@ export class LMStudioClient {
     const body = await response.json();
     return extractJson(body.choices?.[0]?.message?.content ?? '');
   }
+  async structuredChat({ model, messages, jsonSchema, temperature = 0.1 }) {
+    if (!model) throw new Error('Select an LM Studio model before running an agent.');
+    const response = await fetch(`${this.baseUrl}/chat/completions`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, messages, temperature, response_format: { type: 'json_schema', json_schema: jsonSchema } })
+    });
+    if (!response.ok) throw new Error(`LM Studio ${response.status}: ${await response.text()}`);
+    const body = await response.json();
+    return extractJson(body.choices?.[0]?.message?.content ?? '');
+  }
   async plan({ model, messages, tools }) {
     if (!model) throw new Error('Select an LM Studio model before starting a chat.');
     const response = await fetch(`${this.baseUrl}/chat/completions`, {

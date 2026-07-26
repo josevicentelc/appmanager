@@ -36,3 +36,25 @@ test('persists, searches and reads diff hunks through FileStore', async (context
   assert.match(hunk.content, /validateSignature\(token\)/);
   assert.equal(hunk.truncated, false);
 });
+
+test('paginates exhaustive commit searches and reports total coverage', async (context) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'appmanager-page-test-'));
+  context.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const store = new FileStore(directory);
+  for (let index = 1; index <= 3; index += 1) {
+    const commitSha = String(index).padStart(40, '0');
+    await store.saveCommit(repository, commitSha, { parents: [] }, '', {
+      repository, sha: commitSha, commitDate: `2026-0${index}-01T10:00:00Z`,
+      originalMessage: `Commit ${index}`, tags: [], technicalDetails: {}
+    }, { state: 'completed' });
+  }
+  const first = await store.searchAnalysesPage([repository], { from: '2026-01-01', to: '2026-12-31', limit: 2 });
+  assert.equal(first.totalMatches, 3);
+  assert.equal(first.results.length, 2);
+  assert.equal(first.hasMore, true);
+  assert.equal(first.nextOffset, 2);
+  const second = await store.searchAnalysesPage([repository], { from: '2026-01-01', to: '2026-12-31', offset: first.nextOffset, limit: 2 });
+  assert.equal(second.results.length, 1);
+  assert.equal(second.hasMore, false);
+  assert.equal(second.nextOffset, null);
+});

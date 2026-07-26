@@ -188,7 +188,9 @@ npm run backfill:tags -- owner/repo  # añade tags Git a análisis existentes
 
 ## Recuperacion de conocimiento en el chat
 
-El chat no inyecta el historico completo en cada consulta. Primero recupera hasta seis analisis relevantes por coincidencia lexical sobre mensaje, resumen, archivos, cambios, riesgos y etiquetas. El modelo recibe ese contexto compacto y herramientas para buscar y leer analisis, buscar dentro de los diffs, recuperar hunks completos y leer un rango acotado del archivo en el commit o en su primer padre.
+El chat no inyecta el histórico completo en cada consulta. Para preguntas normales recupera hasta seis análisis relevantes por coincidencia léxica sobre mensaje, resumen, archivos, cambios, riesgos y etiquetas. El modelo recibe ese contexto compacto y herramientas para buscar y leer análisis, buscar dentro de los diffs, recuperar hunks completos y leer un rango acotado del archivo en el commit o en su primer padre.
+
+Las consultas de informe con un año o periodo, por ejemplo *"Dame los cambios hechos en el servidor en 2026"*, siguen un flujo exhaustivo: recuperan todos los commits del rango antes de aplicar una clasificación semántica.
 
 Los indices de diff se generan al sincronizar. Para datos existentes se crean automaticamente la primera vez que una busqueda necesita el `diff.patch`, por lo que no es necesario repetir la sincronizacion.
 
@@ -200,15 +202,37 @@ Las lecturas largas de hunks y archivos son paginadas. Cada resultado indica `tr
 
 ### Modo de depuracion
 
-El chat incluye un interruptor **Modo depuracion**. Cuando esta activo, el servidor envia eventos de traza junto a la respuesta SSE y la interfaz muestra:
+El chat incluye un interruptor **Modo depuración**. Cuando está activo, el servidor envía eventos de traza junto a la respuesta SSE y la interfaz muestra:
 
-- fuentes elegidas para el contexto inicial;
-- cada ronda de planificacion y su duracion;
+- fuentes elegidas para el contexto inicial y su cobertura;
+- cada ronda de planificación y su duración;
 - herramientas solicitadas por el modelo y sus argumentos;
-- numero de resultados, fuentes, fechas, truncamientos y continuaciones;
-- momento de inicio y fin de la generacion final.
+- número de resultados, fuentes, fechas, truncamientos y continuaciones;
+- actividad y resultados de los agentes delegados;
+- momento de inicio y fin de la generación final.
 
-La traza no incluye el token de GitHub, el prompt del sistema, el historial completo ni cuerpos grandes de codigo. Se conserva en pantalla hasta iniciar otra consulta o una nueva conversacion.
+La traza no incluye el token de GitHub, el prompt del sistema, el historial completo ni cuerpos grandes de código. Se conserva en pantalla hasta iniciar otra consulta o una nueva conversación.
+
+### Director y agentes especializados
+
+El chat utiliza un director que coordina herramientas deterministas y agentes con contextos acotados. Las consultas que piden informes o cambios de un período se reconocen como trabajos exhaustivos:
+
+1. El servidor obtiene todos los commits del rango sin aplicar filtros semánticos prematuros.
+2. El director delega el conjunto completo al agente `commit_classifier`.
+3. El agente procesa lotes de hasta ocho commits y reintenta una vez cualquier referencia omitida.
+4. El resultado incluye un contrato de cobertura con `requested`, `processed`, `missing` y `complete`.
+5. Si la cobertura es completa, el director sintetiza directamente. Si no lo es, debe informar de las referencias pendientes.
+
+La clasificación automática admite hasta 200 commits por informe y divide la delegación en grupos de 24. Para otras preguntas, el director puede invocar manualmente `delegate_commit_classification` sobre un conjunto recuperado con las herramientas.
+
+Las herramientas disponibles para el director son:
+
+- `search_commit_knowledge`: búsqueda paginada por texto, repositorio, etiquetas y fechas; devuelve `totalMatches`, `hasMore` y `nextOffset`.
+- `get_commit_knowledge`: lectura del análisis estructurado de un commit.
+- `delegate_commit_classification`: clasificación semántica por un agente especializado con contrato de cobertura.
+- `search_diff_hunks`, `read_diff_hunk` y `read_file_at_commit`: investigación de bajo nivel en diffs y código.
+
+Durante la ejecución, una barra de actividad informa si el director está planificando, ejecutando herramientas, delegando, procesando un lote o redactando la respuesta final. Esta información aparece aunque el modo de depuración esté desactivado.
 
 Para una recuperacion semantica basada en embeddings se requeriria añadir un modelo de embeddings y un indice vectorial local; esta version usa busqueda lexical determinista para mantener el MVP sin dependencias ni base de datos.
 

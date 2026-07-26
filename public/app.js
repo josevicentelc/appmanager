@@ -11,7 +11,7 @@ async function api(path, options) {
   return data;
 }
 
-async function streamChat(payload, onDelta, onDebug) {
+async function streamChat(payload, onDelta, onDebug, onActivity) {
   const response = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
   if (!response.ok) {
     const data = await response.json();
@@ -28,6 +28,7 @@ async function streamChat(payload, onDelta, onDebug) {
     const value = JSON.parse(data);
     if (type === 'delta') onDelta(value.text);
     if (type === 'debug') onDebug?.(value);
+    if (type === 'activity') onActivity?.(value);
     if (type === 'error') throw new Error(value.error || 'El flujo del modelo falló.');
   };
   while (true) {
@@ -82,6 +83,7 @@ const debugStageLabels = {
   request: 'Petición', initial_context: 'Contexto inicial', planning_started: 'Planificación iniciada',
   planning_completed: 'Decisión del LLM', planning_stopped: 'Planificación detenida',
   tool_started: 'Herramienta iniciada', tool_completed: 'Herramienta completada',
+  agent_activity: 'Actividad de agente',
   final_generation_started: 'Respuesta final iniciada', final_generation_completed: 'Respuesta final completada',
   server_error: 'Error del servidor', client_error: 'Error'
 };
@@ -100,6 +102,13 @@ function renderDebug() {
     return `<article class="debug-entry ${escapeHtml(item.stage || '')}${error ? ' error' : ''}"><header><time>${escapeHtml(time)}</time><strong>${escapeHtml(debugStageLabels[item.stage] || item.stage)}</strong></header>${Object.keys(details).length ? `<pre>${escapeHtml(JSON.stringify(details, null, 2))}</pre>` : ''}</article>`;
   }).join('');
   panel.scrollTop = panel.scrollHeight;
+}
+
+function showAgentActivity(value) {
+  const element = $('#agentActivity');
+  element.hidden = false;
+  element.className = `agent-activity${value.stage === 'completed' ? ' completed' : value.stage === 'client_error' || value.stage === 'server_error' ? ' error' : ''}`;
+  element.querySelector('span').textContent = value.message || value.stage;
 }
 
 const assistantIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 9h8M8 13h5m-7 7 3.2-3H18a3 3 0 0 0 3-3V6a3 3 0 0 0-3-3H6a3 3 0 0 0-3 3v8a3 3 0 0 0 3 3v3Z"/></svg>';
@@ -168,7 +177,7 @@ document.querySelectorAll('.tab').forEach((tab) => tab.addEventListener('click',
   document.querySelectorAll('.tab').forEach((button) => button.classList.toggle('active', button === tab));
 }));
 
-$('#newChatButton').addEventListener('click', () => { conversation = []; debugEvents = []; renderMessages(); renderDebug(); $('#chatQuestion').focus(); });
+$('#newChatButton').addEventListener('click', () => { conversation = []; debugEvents = []; $('#agentActivity').hidden = true; renderMessages(); renderDebug(); $('#chatQuestion').focus(); });
 
 $('#debugMode').addEventListener('change', (event) => {
   localStorage.setItem('appmanager.debug', String(event.currentTarget.checked));
@@ -208,6 +217,7 @@ $('#chatForm').addEventListener('submit', async (event) => {
   debugEvents = [];
   renderMessages();
   renderDebug();
+  showAgentActivity({ stage: 'started', message: 'Preparando la consulta…' });
   try {
     await streamChat({ question, history, mode: $('#chatMode').value, debug: $('#debugMode').checked }, (text) => {
       conversation[conversation.length - 1].content += text;
@@ -215,6 +225,8 @@ $('#chatForm').addEventListener('submit', async (event) => {
     }, (entry) => {
       debugEvents.push(entry);
       renderDebug();
+    }, (activity) => {
+      showAgentActivity(activity);
     });
   } catch (error) {
     conversation[conversation.length - 1].content = `No he podido responder: ${error.message}`;
@@ -222,6 +234,7 @@ $('#chatForm').addEventListener('submit', async (event) => {
       debugEvents.push({ timestamp: new Date().toISOString(), stage: 'client_error', error: error.message });
       renderDebug();
     }
+    showAgentActivity({ stage: 'client_error', message: error.message });
   } finally {
     setChatBusy(false);
     renderMessages();

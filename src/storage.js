@@ -73,7 +73,7 @@ export class FileStore {
     }
     return analyses.sort((a, b) => String(b.commitDate ?? '').localeCompare(String(a.commitDate ?? ''))).slice(0, limit);
   }
-  async searchAnalyses(repositories, { query = '', repository = '', tags = [], from = '', to = '', limit = 8 } = {}) {
+  async rankAnalyses(repositories, { query = '', repository = '', tags = [], from = '', to = '' } = {}) {
     const requestedTags = new Set((Array.isArray(tags) ? tags : []).map((tag) => String(tag).toLocaleLowerCase()).filter(Boolean));
     const queryWords = [...new Set(words(query))];
     const candidates = await this.listAnalyses(repositories, Number.MAX_SAFE_INTEGER);
@@ -87,7 +87,19 @@ export class FileStore {
         return { analysis, score };
       }).filter(({ score }) => !queryWords.length || score > 0)
       .sort((a, b) => b.score - a.score || String(b.analysis.commitDate ?? '').localeCompare(String(a.analysis.commitDate ?? '')))
-      .slice(0, Math.max(1, Math.min(Number(limit) || 8, 12))).map(({ analysis }) => compactAnalysis(analysis));
+      .map(({ analysis }) => compactAnalysis(analysis));
+  }
+  async searchAnalyses(repositories, { limit = 8, ...filters } = {}) {
+    const ranked = await this.rankAnalyses(repositories, filters);
+    return ranked.slice(0, Math.max(1, Math.min(Number(limit) || 8, 50)));
+  }
+  async searchAnalysesPage(repositories, { offset = 0, limit = 20, ...filters } = {}) {
+    const ranked = await this.rankAnalyses(repositories, filters);
+    const safeOffset = Math.max(0, Math.floor(Number(offset) || 0));
+    const safeLimit = Math.max(1, Math.min(Math.floor(Number(limit) || 20), 50));
+    const results = ranked.slice(safeOffset, safeOffset + safeLimit);
+    const nextOffset = safeOffset + results.length < ranked.length ? safeOffset + results.length : null;
+    return { results, totalMatches: ranked.length, offset: safeOffset, limit: safeLimit, hasMore: nextOffset !== null, nextOffset };
   }
   async searchDiffHunks(repositories, { query, repository = '', sha = '', path: filePath = '', from = '', to = '', limit = 8, maxCommits = 500 } = {}) {
     let candidates;
