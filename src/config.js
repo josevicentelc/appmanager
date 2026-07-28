@@ -26,6 +26,12 @@ export async function loadEnvironment(root) {
   return {
     githubToken: values.GITHUB_TOKEN,
     githubCaCertFile: values.GITHUB_CA_CERT_FILE ? path.resolve(root, values.GITHUB_CA_CERT_FILE) : null,
+    asanaToken: values.ASANA_TOKEN ?? '',
+    asanaWorkspaceId: values.ASANA_WORKSPACE_ID ?? '',
+    asanaCaCertFile: values.ASANA_CA_CERT_FILE ? path.resolve(root, values.ASANA_CA_CERT_FILE) : (values.GITHUB_CA_CERT_FILE ? path.resolve(root, values.GITHUB_CA_CERT_FILE) : null),
+    asanaTimeoutMs: Math.max(1_000, Number(values.ASANA_TIMEOUT_MS) || 30_000),
+    asanaMaxRetries: Math.max(0, Number(values.ASANA_MAX_RETRIES) || 3),
+    asanaMaxAttachmentBytes: Math.max(1_024, Number(values.ASANA_MAX_ATTACHMENT_BYTES) || 25 * 1024 * 1024),
     lmStudioBaseUrl: values.LMSTUDIO_BASE_URL.replace(/\/+$/, ''),
     initialModel: values.LMSTUDIO_MODEL ?? '',
     dataDirectory: path.resolve(root, values.DATA_DIRECTORY || './data'),
@@ -42,7 +48,9 @@ export function defaultAppConfig(environment) {
     model: environment.initialModel,
     syncIntervalMinutes: environment.initialIntervalMinutes,
     language: environment.defaultLanguage,
-    repositories: []
+    repositories: [],
+    repositoryNotes: {},
+    asanaProjects: []
   };
 }
 

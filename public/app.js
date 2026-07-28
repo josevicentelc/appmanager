@@ -144,12 +144,14 @@ function setChatBusy(busy) {
 
 async function load() {
   config = await api('/api/config');
-  const [models, githubRepositories] = await Promise.all([api('/api/models'), api('/api/github-repositories')]);
+  const [models, githubRepositories, asanaProjects] = await Promise.all([api('/api/models'), api('/api/github-repositories'), api('/api/asana-projects')]);
   $('#importSince').value = config.importSince;
   $('#interval').value = config.syncIntervalMinutes;
   $('#language').value = config.language;
   $('#model').innerHTML = '<option value="">Selecciona un modelo</option>' + models.models.map((id) => `<option ${id === config.model ? 'selected' : ''} value="${escapeHtml(id)}">${escapeHtml(id)}</option>`).join('');
-  $('#repositoryChoices').innerHTML = githubRepositories.repositories.map((repo) => `<label class="repository-choice"><input type="checkbox" value="${escapeHtml(repo.fullName)}" ${config.repositories.includes(repo.fullName) ? 'checked' : ''}><span><strong>${escapeHtml(repo.fullName)}</strong><small>${repo.private ? 'Privado' : 'Público'} · ${escapeHtml(repo.description || 'Sin descripción')}</small></span></label>`).join('') || '<p>No hay repositorios disponibles para este token.</p>';
+  $('#repositoryChoices').innerHTML = githubRepositories.repositories.map((repo) => `<article class="repository-context"><label class="repository-choice"><input type="checkbox" value="${escapeHtml(repo.fullName)}" ${config.repositories.includes(repo.fullName) ? 'checked' : ''}><span><strong>${escapeHtml(repo.fullName)}</strong><small>${repo.private ? 'Privado' : 'Público'} · ${escapeHtml(repo.description || 'Sin descripción')}</small></span></label><label class="repository-note-label">Contexto para el LLM<textarea data-repository-note="${escapeHtml(repo.fullName)}" maxlength="6000" placeholder="Arquitectura, propósito, dominio, convenciones o terminología…">${escapeHtml(config.repositoryNotes?.[repo.fullName] || '')}</textarea></label></article>`).join('') || '<p>No hay repositorios disponibles para este token.</p>';
+  $('#asanaConfigHint').textContent = asanaProjects.configured ? 'Selecciona los proyectos cuyas tareas, comentarios, cambios de estado y adjuntos se conservarán localmente.' : 'Configura ASANA_TOKEN y ASANA_WORKSPACE_ID en .env y reinicia la aplicación para activar Asana.';
+  $('#asanaProjectChoices').innerHTML = asanaProjects.projects.map((project) => `<label class="repository-choice"><input type="checkbox" value="${escapeHtml(project.gid)}" ${config.asanaProjects.includes(project.gid) ? 'checked' : ''}><span><strong>${escapeHtml(project.name)}</strong><small>${project.archived ? 'Archivado' : 'Activo'} · ${escapeHtml(project.gid)}</small></span></label>`).join('') || (asanaProjects.configured ? '<p>No hay proyectos disponibles para este token de Asana.</p>' : '');
   $('#chatContext').textContent = config.repositories.length ? `${config.repositories.length} repositorio(s) seleccionado(s) como fuente de conocimiento.` : 'Selecciona y sincroniza repositorios en Configuración para alimentar el chat.';
   await refreshStatus();
 }
@@ -157,17 +159,22 @@ async function load() {
 async function refreshStatus() {
   const status = await api('/api/status');
   const running = status.sync.running;
+  const asanaRunning = status.asana?.running;
   $('#runStatus').textContent = running ? `Procesando ${status.sync.current?.repository ?? ''}…` : status.sync.lastRun ? `Última ejecución: ${new Date(status.sync.lastRun.completedAt).toLocaleString()}` : 'Todavía no se ha ejecutado ninguna sincronización.';
   const current = status.sync.current;
   const activityText = { checking_repository: 'GitHub: comprobando acceso al repositorio.', listing_commits: 'GitHub: consultando el historial de commits.', listing_tags: 'GitHub: consultando tags y versiones publicadas.', downloading_commit: 'GitHub: descargando metadatos y diff del commit.', digesting_commit: 'LM Studio: analizando el contexto y diff del commit.', saving_analysis: 'Almacenamiento local: guardando el análisis estructurado.', skipping_existing: 'Almacenamiento local: el commit ya estaba analizado; se omite.' };
   $('#syncActivity').textContent = current ? `${activityText[current.stage] || 'Sincronizando.'} ${current.position ? `(${current.position}/${current.total}) ` : ''}${current.sha ? `${current.sha.slice(0, 12)}${current.message ? ` — ${current.message}` : ''}` : ''}` : 'No hay ninguna sincronización activa.';
   $('#syncButton').disabled = running;
+  $('#asanaSyncButton').disabled = !status.asana?.configured || asanaRunning || !config.asanaProjects.length;
   $('#repositories').innerHTML = status.repositories.map((repo) => {
     const active = status.sync.current?.repository === repo.repository;
     const { progress, state } = repo;
     const description = active ? $('#syncActivity').textContent : state.lastError || (state.lastCheckedAt ? `Comprobado: ${new Date(state.lastCheckedAt).toLocaleString()}` : 'Pendiente de primera sincronización');
     return `<article><strong>${escapeHtml(repo.repository)}</strong><span>${progress.completed}/${progress.total} analizados · ${progress.pending} pendientes · ${progress.analyzing} en análisis</span><div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress.percentage}"><i style="width:${progress.percentage}%"></i></div><small>${progress.percentage}% · ${escapeHtml(description)}</small></article>`;
   }).join('');
+  const asanaActivity = { listing_tasks: 'Asana: obteniendo tareas del proyecto.', downloading_task: 'Asana: descargando tarea, comentarios y adjuntos.', digesting_task: 'LM Studio: digiriendo la tarea de Asana.', saving_analysis: 'Almacenamiento local: guardando el conocimiento de Asana.', skipping_existing: 'Almacenamiento local: la tarea no ha cambiado; se omite.' };
+  const asanaCurrent = status.asana?.current;
+  $('#repositories').innerHTML += (status.asanaProjects ?? []).map(({ projectGid, state }) => `<article><strong>Asana · ${escapeHtml(projectGid)}</strong><span>${escapeHtml(state.sync?.state || 'pendiente')}</span><small>${escapeHtml(asanaCurrent?.projectGid === projectGid ? `${asanaActivity[asanaCurrent.stage] || 'Sincronizando.'} (${asanaCurrent.position || 0}/${asanaCurrent.total || 0})` : state.lastError || (state.lastSyncedAt ? `Sincronizado: ${new Date(state.lastSyncedAt).toLocaleString()}` : 'Pendiente de primera sincronización'))}</small></article>`).join('');
 }
 
 document.querySelectorAll('.tab').forEach((tab) => tab.addEventListener('click', () => {
@@ -245,8 +252,8 @@ $('#chatForm').addEventListener('submit', async (event) => {
 $('#configForm').addEventListener('submit', async (event) => {
   event.preventDefault();
   try {
-    config = await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ importSince: $('#importSince').value, model: $('#model').value, syncIntervalMinutes: Number($('#interval').value), language: $('#language').value, repositories: [...document.querySelectorAll('#repositoryChoices input:checked')].map((input) => input.value) }) });
-    message(`${config.repositories.length} repositorio(s) guardados.`);
+    config = await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ importSince: $('#importSince').value, model: $('#model').value, syncIntervalMinutes: Number($('#interval').value), language: $('#language').value, repositories: [...document.querySelectorAll('#repositoryChoices input:checked')].map((input) => input.value), repositoryNotes: Object.fromEntries([...document.querySelectorAll('[data-repository-note]')].map((input) => [input.dataset.repositoryNote, input.value])), asanaProjects: [...document.querySelectorAll('#asanaProjectChoices input:checked')].map((input) => input.value) }) });
+    message(`${config.repositories.length} repositorio(s) y ${config.asanaProjects.length} proyecto(s) de Asana guardados.`);
     $('#chatContext').textContent = config.repositories.length ? `${config.repositories.length} repositorio(s) seleccionado(s) como fuente de conocimiento.` : 'Selecciona y sincroniza repositorios en Configuración para alimentar el chat.';
     await refreshStatus();
   } catch (error) { message(error.message, true); }
@@ -256,6 +263,15 @@ $('#syncButton').addEventListener('click', async () => {
   try {
     const result = await api('/api/sync', { method: 'POST' });
     message(`Sincronización terminada: ${result.repositories.reduce((total, repo) => total + repo.processed, 0)} commits procesados.`);
+    await refreshStatus();
+  } catch (error) { message(error.message, true); }
+});
+
+$('#asanaSyncButton').addEventListener('click', async () => {
+  try {
+    const result = await api('/api/asana/sync', { method: 'POST' });
+    const processed = result.projects.reduce((total, project) => total + project.processed, 0);
+    message(`Sincronización de Asana terminada: ${processed} tarea(s) procesada(s).`);
     await refreshStatus();
   } catch (error) { message(error.message, true); }
 });

@@ -254,3 +254,43 @@ Para una recuperacion semantica basada en embeddings se requeriria añadir un mo
 - Usa un token con permisos mínimos y fecha de expiración.
 - `data/` puede contener código, diffs y metadatos sensibles; está ignorado por Git a propósito.
 - La aplicación no expone el token al frontend.
+
+## Contexto por repositorio
+
+En **Configuración**, cada repositorio incluye un campo persistente **Contexto para el LLM**. Úsalo para describir el propósito del repositorio, arquitectura, límites de componentes, dominio funcional, responsables, convenciones y terminología interna. Se guarda en `data/config.json` al pulsar **Guardar configuración** y se aporta al director en cada conversación.
+
+Estas notas están limitadas a 6.000 caracteres por repositorio y se tratan como contexto descriptivo, no como evidencia: el modelo debe verificar cambios, código y hechos mediante el conocimiento sincronizado y sus herramientas.
+
+## Integración con Asana
+
+Asana es una fuente opcional de conocimiento local. Añade a `.env`:
+
+```dotenv
+ASANA_TOKEN=
+ASANA_WORKSPACE_ID=
+ASANA_TIMEOUT_MS=30000
+ASANA_MAX_RETRIES=3
+ASANA_MAX_ATTACHMENT_BYTES=26214400
+```
+
+Después de reiniciar, la configuración muestra los proyectos disponibles. Selecciona los que deban formar parte de la base de conocimiento y usa **Sincronizar Asana**. El ciclo periódico también sincroniza los proyectos seleccionados.
+
+Por tarea se conservan los datos crudos, descripción, responsables, fechas, campos personalizados, etiquetas, comentarios y eventos de cambio de estado. Se guarda además el inventario de adjuntos y se descargan localmente aquellos que Asana permite descargar, con un límite por fichero configurable. Los adjuntos de texto (`.txt`, `.md`, `.json`, `.csv`, `.log`, `.yaml`) se incorporan de forma acotada a la digestión; los binarios se conservan e inventarían, pero no se envían al LLM.
+
+La sincronización pagina la API y reintenta errores transitorios y límites de uso. Una tarea solo se vuelve a analizar cuando cambia `modified_at`, por lo que comentarios y cambios posteriores realimentan el conocimiento sin repetir trabajo innecesario.
+
+```text
+data/asana/projects/<project-gid>/
+  state.json
+  tasks/<task-gid>/
+    task-raw.json        # tarea original de Asana
+    stories-raw.json     # comentarios y eventos de estado
+    attachments.json     # inventario, tamaño, tipo y ruta local
+    attachments/         # ficheros descargados
+    analysis.json        # conocimiento estructurado para buscar
+    status.json
+```
+
+El director dispone de `search_asana_tasks` para localizar tareas relevantes y `get_asana_task_knowledge` para recuperar su descripción, digestión, comentarios, cambios e inventario de adjuntos. Las citas de esta fuente se expresan como `[asana:project-gid@task-gid]`.
+
+La API local incluye `GET /api/asana-projects` y `POST /api/asana/sync`. El token nunca se expone al navegador. Puesto que los adjuntos pueden ser sensibles, `data/asana/` debe mantenerse fuera de Git.

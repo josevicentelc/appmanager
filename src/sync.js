@@ -1,3 +1,10 @@
+export function isWithinImportRange(commit, importSince) {
+  const date = commit?.commit?.author?.date;
+  const cutoff = new Date(`${importSince}T00:00:00.000Z`);
+  const candidate = new Date(date);
+  return Number.isFinite(cutoff.getTime()) && Number.isFinite(candidate.getTime()) && candidate >= cutoff;
+}
+
 export class SyncService {
   constructor({ environment, store, github, lmStudio, getConfig }) {
     this.environment = environment; this.store = store; this.github = github; this.lmStudio = lmStudio; this.getConfig = getConfig;
@@ -20,7 +27,10 @@ export class SyncService {
         try {
           const remote = await this.github.getRepository(repository);
           this.current = { repository, stage: 'listing_commits', sha: null, position: 0, total: 0, since };
-          const commits = await this.github.listCommits(repository, since);
+          // GitHub applies `since` to the committer timestamp. AppManager's visible
+          // commit date and all retrieval filters use author.date, so enforce that
+          // same boundary locally to prevent old commits reintroduced by a merge.
+          const commits = (await this.github.listCommits(repository, since)).filter((commit) => isWithinImportRange(commit, config.importSince));
           this.current = { repository, stage: 'listing_tags', sha: null, position: 0, total: commits.length };
           const repositoryTags = await this.github.listTags(repository);
           const tagMap = new Map();

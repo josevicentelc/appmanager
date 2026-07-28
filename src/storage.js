@@ -73,6 +73,33 @@ export class FileStore {
     }
     return analyses.sort((a, b) => String(b.commitDate ?? '').localeCompare(String(a.commitDate ?? ''))).slice(0, limit);
   }
+  async listCommitAuthors(repositories, { repository = '', from = '', to = '' } = {}) {
+    const selected = repository ? [repository] : repositories;
+    const authors = new Map();
+    let matchedCommits = 0;
+    for (const currentRepository of selected) {
+      for (const sha of await this.listCommitShas(currentRepository)) {
+        const raw = await this.getCommitRaw(currentRepository, sha);
+        const date = raw?.commit?.author?.date ?? '';
+        if (!raw || (from && date < from) || (to && date > `${to}T23:59:59.999Z`)) continue;
+        const name = String(raw.commit?.author?.name ?? '').trim();
+        const email = String(raw.commit?.author?.email ?? '').trim();
+        const githubLogin = String(raw.author?.login ?? '').trim();
+        if (!name && !email && !githubLogin) continue;
+        const key = githubLogin ? `github:${githubLogin.toLocaleLowerCase()}` : email ? `email:${email.toLocaleLowerCase()}` : `name:${name.toLocaleLowerCase()}`;
+        const existing = authors.get(key) ?? { name: name || githubLogin || email, email: email || null, githubLogin: githubLogin || null, commits: 0, repositories: new Set(), firstCommitDate: date, lastCommitDate: date };
+        existing.commits += 1; existing.repositories.add(currentRepository);
+        if (date && date < existing.firstCommitDate) existing.firstCommitDate = date;
+        if (date && date > existing.lastCommitDate) existing.lastCommitDate = date;
+        authors.set(key, existing); matchedCommits += 1;
+      }
+    }
+    return {
+      matchedCommits,
+      authors: [...authors.values()].map((author) => ({ ...author, repositories: [...author.repositories].sort() }))
+        .sort((a, b) => b.commits - a.commits || a.name.localeCompare(b.name))
+    };
+  }
   async rankAnalyses(repositories, { query = '', repository = '', tags = [], from = '', to = '' } = {}) {
     const requestedTags = new Set((Array.isArray(tags) ? tags : []).map((tag) => String(tag).toLocaleLowerCase()).filter(Boolean));
     const queryWords = [...new Set(words(query))];
