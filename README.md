@@ -255,6 +255,22 @@ Para una recuperacion semantica basada en embeddings se requeriria añadir un mo
 - `data/` puede contener código, diffs y metadatos sensibles; está ignorado por Git a propósito.
 - La aplicación no expone el token al frontend.
 
+## Acceso con contraseña
+
+La interfaz y todas las APIs de conocimiento requieren una sesión autenticada. Define estos valores en `.env` antes de iniciar el servidor:
+
+```dotenv
+AUTH_USERNAME=admin
+AUTH_PASSWORD=usa-una-contraseña-larga-unica
+# Obligatorio al publicar detrás de HTTPS.
+AUTH_COOKIE_SECURE=true
+AUTH_SESSION_HOURS=12
+```
+
+Las sesiones se guardan únicamente en memoria, caducan tras el periodo configurado y se invalidan al reiniciar el proceso. La cookie es `HttpOnly`, `SameSite=Strict` y, con `AUTH_COOKIE_SECURE=true`, `Secure`. El acceso limita los intentos fallidos por IP.
+
+Para exponer el servicio públicamente, publícalo únicamente detrás de un proxy inverso con HTTPS válido (por ejemplo, Caddy, Nginx o un túnel con TLS). No uses `AUTH_COOKIE_SECURE=false` en Internet y no expongas directamente el puerto de Node.
+
 ## Contexto por repositorio
 
 En **Configuración**, cada repositorio incluye un campo persistente **Contexto para el LLM**. Úsalo para describir el propósito del repositorio, arquitectura, límites de componentes, dominio funcional, responsables, convenciones y terminología interna. Se guarda en `data/config.json` al pulsar **Guardar configuración** y se aporta al director en cada conversación.

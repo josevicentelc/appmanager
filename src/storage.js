@@ -100,6 +100,23 @@ export class FileStore {
         .sort((a, b) => b.commits - a.commits || a.name.localeCompare(b.name))
     };
   }
+  async findCommitsByAuthor(repositories, { author, repository = '', from = '', to = '', limit = 50 } = {}) {
+    const query = String(author ?? '').trim().toLocaleLowerCase();
+    if (!query) return [];
+    const selected = repository ? [repository] : repositories;
+    const matches = [];
+    for (const currentRepository of selected) {
+      for (const sha of await this.listCommitShas(currentRepository)) {
+        const raw = await this.getCommitRaw(currentRepository, sha);
+        const date = raw?.commit?.author?.date ?? '';
+        const identity = [raw?.commit?.author?.name, raw?.commit?.author?.email, raw?.author?.login].filter(Boolean).join(' ').toLocaleLowerCase();
+        if (!raw || !identity.includes(query) || (from && date < from) || (to && date > `${to}T23:59:59.999Z`)) continue;
+        const analysis = await this.getAnalysis(currentRepository, sha);
+        if (analysis) matches.push(compactAnalysis(analysis));
+      }
+    }
+    return matches.sort((a, b) => String(b.commitDate ?? '').localeCompare(String(a.commitDate ?? ''))).slice(0, Math.max(1, Math.min(Number(limit) || 20, 50)));
+  }
   async rankAnalyses(repositories, { query = '', repository = '', tags = [], from = '', to = '' } = {}) {
     const requestedTags = new Set((Array.isArray(tags) ? tags : []).map((tag) => String(tag).toLocaleLowerCase()).filter(Boolean));
     const queryWords = [...new Set(words(query))];

@@ -16,4 +16,6 @@ test('aggregates commit authors from raw GitHub metadata with date filters', asy
   const result = await store.listCommitAuthors([repository], { from: '2026-03-01' });
   assert.equal(result.matchedCommits, 2);
   assert.deepEqual(result.authors, [{ name: 'Ana', email: 'ana@example.test', githubLogin: 'ana', commits: 2, repositories: [repository], firstCommitDate: '2026-03-01T00:00:00Z', lastCommitDate: '2026-03-05T00:00:00Z' }]);
+  const commits = await store.findCommitsByAuthor([repository], { author: 'ANA', from: '2026-03-01' });
+  assert.deepEqual(commits.map((item) => item.sha), ['a2', 'a1']);
 });

@@ -3,11 +3,15 @@ let config;
 let conversation = [];
 let chatBusy = false;
 let debugEvents = [];
+let currentAgentActivity = null;
 
 async function api(path, options) {
   const response = await fetch(path, options);
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error || 'Error inesperado');
+  if (!response.ok) {
+    if (response.status === 401 && path !== '/api/auth/login') showLogin();
+    throw new Error(data.error || 'Error inesperado');
+  }
   return data;
 }
 
@@ -105,10 +109,9 @@ function renderDebug() {
 }
 
 function showAgentActivity(value) {
-  const element = $('#agentActivity');
-  element.hidden = false;
-  element.className = `agent-activity${value.stage === 'completed' ? ' completed' : value.stage === 'client_error' || value.stage === 'server_error' ? ' error' : ''}`;
-  element.querySelector('span').textContent = value.message || value.stage;
+  currentAgentActivity = value;
+  $('#agentActivity').hidden = true;
+  renderMessages();
 }
 
 const assistantIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 9h8M8 13h5m-7 7 3.2-3H18a3 3 0 0 0 3-3V6a3 3 0 0 0-3-3H6a3 3 0 0 0-3 3v8a3 3 0 0 0 3 3v3Z"/></svg>';
@@ -129,7 +132,8 @@ function renderMessages() {
     const streaming = item.role === 'assistant' && chatBusy && index === conversation.length - 1 && item.content;
     const content = waiting ? '<span class="typing" aria-label="AppManager está escribiendo"><i></i><i></i><i></i></span>' : item.role === 'assistant' ? formatAssistantMessage(item.content) : escapeHtml(item.content);
     const mode = item.role === 'assistant' ? ($('#chatMode').value === 'executive' ? 'Ejecutivo' : 'Developer') : '';
-    return `<div class="message-row ${item.role}${streaming ? ' streaming' : ''}"><div class="avatar">${item.role === 'user' ? userIcon : assistantIcon}</div><div class="message-content"><div class="message-meta">${item.role === 'user' ? 'Tú' : 'AppManager'}<span>${mode}</span></div><div class="message-body">${content}</div></div></div>`;
+    const activity = item.role === 'assistant' && chatBusy && index === conversation.length - 1 && currentAgentActivity ? `<div class="message-activity${currentAgentActivity.stage === 'client_error' || currentAgentActivity.stage === 'server_error' ? ' error' : ''}"><i></i><span>${escapeHtml(currentAgentActivity.message || currentAgentActivity.stage)}</span></div>` : '';
+    return `<div class="message-row ${item.role}${streaming ? ' streaming' : ''}"><div class="avatar">${item.role === 'user' ? userIcon : assistantIcon}</div><div class="message-content"><div class="message-meta">${item.role === 'user' ? 'Tú' : 'AppManager'}<span>${mode}</span></div><div class="message-body">${content}${activity}</div></div></div>`;
   }).join('');
   messages.scrollTop = messages.scrollHeight;
 }
@@ -184,7 +188,7 @@ document.querySelectorAll('.tab').forEach((tab) => tab.addEventListener('click',
   document.querySelectorAll('.tab').forEach((button) => button.classList.toggle('active', button === tab));
 }));
 
-$('#newChatButton').addEventListener('click', () => { conversation = []; debugEvents = []; $('#agentActivity').hidden = true; renderMessages(); renderDebug(); $('#chatQuestion').focus(); });
+$('#newChatButton').addEventListener('click', () => { conversation = []; debugEvents = []; currentAgentActivity = null; $('#agentActivity').hidden = true; renderMessages(); renderDebug(); $('#chatQuestion').focus(); });
 
 $('#debugMode').addEventListener('change', (event) => {
   localStorage.setItem('appmanager.debug', String(event.currentTarget.checked));
@@ -244,6 +248,7 @@ $('#chatForm').addEventListener('submit', async (event) => {
     showAgentActivity({ stage: 'client_error', message: error.message });
   } finally {
     setChatBusy(false);
+    currentAgentActivity = null;
     renderMessages();
     $('#chatQuestion').focus();
   }
@@ -276,8 +281,32 @@ $('#asanaSyncButton').addEventListener('click', async () => {
   } catch (error) { message(error.message, true); }
 });
 
-$('#debugMode').checked = localStorage.getItem('appmanager.debug') === 'true';
-renderMessages();
-renderDebug();
-load().catch((error) => message(error.message, true));
-setInterval(() => refreshStatus().catch(() => {}), 5000);
+function showLogin() {
+  $('#appShell').hidden = true; $('#loginScreen').hidden = false;
+  $('#loginPassword').value = ''; $('#loginUsername').focus();
+}
+
+let statusTimer;
+async function startAuthenticated() {
+  $('#loginScreen').hidden = true; $('#appShell').hidden = false;
+  $('#debugMode').checked = localStorage.getItem('appmanager.debug') === 'true';
+  renderMessages(); renderDebug();
+  await load();
+  clearInterval(statusTimer); statusTimer = setInterval(() => refreshStatus().catch(() => {}), 5000);
+}
+
+$('#loginForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  $('#loginStatus').textContent = '';
+  try {
+    await api('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: $('#loginUsername').value, password: $('#loginPassword').value }) });
+    await startAuthenticated();
+  } catch (error) { $('#loginStatus').textContent = error.message; }
+});
+
+$('#logoutButton').addEventListener('click', async () => {
+  await fetch('/api/auth/logout', { method: 'POST' });
+  clearInterval(statusTimer); conversation = []; debugEvents = []; showLogin();
+});
+
+api('/api/auth/session').then((session) => session.authenticated ? startAuthenticated() : showLogin()).catch(showLogin);

@@ -8,7 +8,16 @@
   <link rel="stylesheet" href="/app.css">
 </head>
 <body>
-  <main class="app-shell">
+  <section id="loginScreen" class="login-screen">
+    <form id="loginForm" class="login-card">
+      <div class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 9h8M8 13h5m-7 7 3.2-3H18a3 3 0 0 0 3-3V6a3 3 0 0 0-3 3v8a3 3 0 0 0 3 3v3Z"/></svg></div>
+      <h1>AppManager</h1><p>Inicia sesión para acceder al conocimiento local.</p>
+      <label>Usuario<input id="loginUsername" autocomplete="username" required></label>
+      <label>Contraseña<input id="loginPassword" type="password" autocomplete="current-password" required></label>
+      <button type="submit">Iniciar sesión</button><p id="loginStatus" class="error" role="alert"></p>
+    </form>
+  </section>
+  <main id="appShell" class="app-shell" hidden>
     <header class="topbar">
       <a class="brand" href="#" aria-label="AppManager, inicio">
         <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 9h8M8 13h5m-7 7 3.2-3H18a3 3 0 0 0 3-3V6a3 3 0 0 0-3-3H6a3 3 0 0 0-3 3v8a3 3 0 0 0 3 3v3Z"/></svg></span>
@@ -16,7 +25,7 @@
       </a>
       <nav class="tabs" aria-label="Secciones">
         <button class="tab active" data-tab="chat"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 10h8M8 14h5M5 20l2.5-3H18a3 3 0 0 0 3-3V6a3 3 0 0 0-3-3H6a3 3 0 0 0-3 3v8a3 3 0 0 0 3 3v3Z"/></svg>Chat</button>
-        <button class="tab" data-tab="settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg>Configuración</button>
+        <button class="tab" data-tab="settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg>Configuración</button><button id="logoutButton" class="tab">Salir</button>
       </nav>
     </header>
 

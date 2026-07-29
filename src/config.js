@@ -23,8 +23,14 @@ export async function loadEnvironment(root) {
   catch (error) { if (error.code !== 'ENOENT') throw error; }
   if (!values.GITHUB_TOKEN) throw new Error('Falta GITHUB_TOKEN en .env.');
   if (!values.LMSTUDIO_BASE_URL) throw new Error('Falta LMSTUDIO_BASE_URL en .env.');
+  if (!values.AUTH_USERNAME) throw new Error('Falta AUTH_USERNAME en .env.');
+  if (!values.AUTH_PASSWORD) throw new Error('Falta AUTH_PASSWORD en .env.');
   return {
     githubToken: values.GITHUB_TOKEN,
+    authUsername: values.AUTH_USERNAME,
+    authPassword: values.AUTH_PASSWORD,
+    authCookieSecure: values.AUTH_COOKIE_SECURE === 'true',
+    authSessionHours: Math.max(1, Math.min(Number(values.AUTH_SESSION_HOURS) || 12, 168)),
     githubCaCertFile: values.GITHUB_CA_CERT_FILE ? path.resolve(root, values.GITHUB_CA_CERT_FILE) : null,
     asanaToken: values.ASANA_TOKEN ?? '',
     asanaWorkspaceId: values.ASANA_WORKSPACE_ID ?? '',
