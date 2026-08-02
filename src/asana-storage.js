@@ -28,6 +28,12 @@ export class AsanaStore {
       status ? writeJson(path.join(directory, 'status.json'), status) : Promise.resolve()
     ]);
   }
+  attachmentFile(projectGid, taskGid, relativePath) {
+    const directory = this.taskDirectory(projectGid, taskGid);
+    const target = path.resolve(directory, String(relativePath ?? ''));
+    if (!target.startsWith(`${directory}${path.sep}`)) throw new Error('Invalid attachment path.');
+    return target;
+  }
   async saveAttachment(projectGid, taskGid, attachment, data) {
     const directory = path.join(this.taskDirectory(projectGid, taskGid), 'attachments');
     await fs.mkdir(directory, { recursive: true });
@@ -36,17 +42,37 @@ export class AsanaStore {
     await fs.writeFile(target, data);
     return path.relative(this.taskDirectory(projectGid, taskGid), target).replace(/\\/g, '/');
   }
-  async attachmentExists(projectGid, taskGid, relativePath) { try { await fs.access(path.join(this.taskDirectory(projectGid, taskGid), relativePath)); return true; } catch { return false; } }
-  async readAttachment(projectGid, taskGid, relativePath) { return fs.readFile(path.join(this.taskDirectory(projectGid, taskGid), relativePath)); }
+  async attachmentExists(projectGid, taskGid, relativePath) { try { await fs.access(this.attachmentFile(projectGid, taskGid, relativePath)); return true; } catch { return false; } }
+  async readAttachment(projectGid, taskGid, relativePath) { return fs.readFile(this.attachmentFile(projectGid, taskGid, relativePath)); }
   async listTaskGids(projectGid) { try { return (await fs.readdir(path.join(this.projectDirectory(projectGid), 'tasks'), { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => entry.name); } catch (error) { if (error.code === 'ENOENT') return []; throw error; } }
-  async listAnalyses(projectGids) {
+  async findProjectForTask(projectGids, taskGid) {
+    for (const projectGid of projectGids) if ((await this.listTaskGids(projectGid)).includes(String(taskGid))) return projectGid;
+    return null;
+  }
+  async findAttachment(projectGids, attachmentGid) {
+    for (const projectGid of projectGids) {
+      for (const taskGid of await this.listTaskGids(projectGid)) {
+        const attachment = (await this.getAttachments(projectGid, taskGid)).find((item) => String(item.gid) === String(attachmentGid));
+        if (attachment) return { projectGid, taskGid, attachment };
+      }
+    }
+    return null;
+  }
+  async listAnalyses(projectGids, { createdSince = '', createdUntil = '' } = {}) {
     const analyses = [];
-    for (const projectGid of projectGids) for (const taskGid of await this.listTaskGids(projectGid)) { const analysis = await this.getTaskAnalysis(projectGid, taskGid); if (analysis) analyses.push(analysis); }
+    for (const projectGid of projectGids) for (const taskGid of await this.listTaskGids(projectGid)) {
+      const analysis = await this.getTaskAnalysis(projectGid, taskGid);
+      if (!analysis) continue;
+      const createdAt = analysis.task?.createdAt ?? (await this.getTaskRaw(projectGid, taskGid))?.created_at ?? '';
+      if (createdSince && (!createdAt || createdAt < `${createdSince}T00:00:00.000Z`)) continue;
+      if (createdUntil && (!createdAt || createdAt > `${createdUntil}T23:59:59.999Z`)) continue;
+      analyses.push(createdAt && !analysis.task?.createdAt ? { ...analysis, task: { ...analysis.task, createdAt } } : analysis);
+    }
     return analyses.sort((a, b) => String(b.task?.modifiedAt ?? '').localeCompare(String(a.task?.modifiedAt ?? '')));
   }
-  async searchAnalyses(projectGids, { query = '', projectGid = '', completed, limit = 12 } = {}) {
+  async searchAnalyses(projectGids, { query = '', projectGid = '', createdSince = '', createdUntil = '', completed, limit = 12 } = {}) {
     const terms = [...new Set(words(query))];
-    return (await this.listAnalyses(projectGids)).filter((analysis) => !projectGid || analysis.project?.gid === projectGid)
+    return (await this.listAnalyses(projectGids, { createdSince, createdUntil })).filter((analysis) => !projectGid || analysis.project?.gid === projectGid)
       .filter((analysis) => completed === undefined || analysis.task?.completed === completed)
       .map((analysis) => {
         const searchable = [analysis.project?.name, analysis.task?.name, analysis.task?.assigneeName, analysis.briefDescription, analysis.objective, analysis.statusSummary, ...(analysis.tags ?? []), ...(analysis.workPerformed ?? []), ...(analysis.decisions ?? []), ...(analysis.blockers ?? []), ...(analysis.risksOrFollowUps ?? [])].join(' ').toLocaleLowerCase();

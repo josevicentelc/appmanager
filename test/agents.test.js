@@ -47,3 +47,13 @@ test('classification agent reports references the worker failed to classify', as
   assert.equal(result.coverage.processed, 0);
   assert.equal(result.coverage.missing.length, 2);
 });
+
+test('classification agent keeps the chat recoverable when structured output fails', async () => {
+  const commits = [commit(1)];
+  const activities = [];
+  const lmStudio = { async structuredChat() { throw new Error('El modelo no devolvió un objeto JSON.'); } };
+  const result = await new CommitClassificationAgent(lmStudio).run({ model: 'test', language: 'es', task: 'Cambios de servidor', commits, onActivity: (activity) => activities.push(activity) });
+  assert.equal(result.coverage.complete, false);
+  assert.equal(result.coverage.attempts, 2);
+  assert.equal(activities.filter((activity) => activity.stage === 'agent_batch_failed').length, 2);
+});

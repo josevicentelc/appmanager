@@ -56,7 +56,8 @@ export function defaultAppConfig(environment) {
     language: environment.defaultLanguage,
     repositories: [],
     repositoryNotes: {},
-    asanaProjects: []
+    asanaProjects: [],
+    asanaImportSince: thirtyDaysAgo
   };
 }
 

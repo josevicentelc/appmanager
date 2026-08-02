@@ -31,13 +31,17 @@ export class SyncService {
           // commit date and all retrieval filters use author.date, so enforce that
           // same boundary locally to prevent old commits reintroduced by a merge.
           const commits = (await this.github.listCommits(repository, since)).filter((commit) => isWithinImportRange(commit, config.importSince));
-          this.current = { repository, stage: 'listing_tags', sha: null, position: 0, total: commits.length };
+          // Keep retrying persisted failures even after GitHub's cursor advances.
+          const commitsBySha = new Map(commits.map((commit) => [commit.sha, commit]));
+          for (const pending of await this.store.listPendingCommits(repository)) commitsBySha.set(pending.sha, pending);
+          const commitsToProcess = [...commitsBySha.values()];
+          this.current = { repository, stage: 'listing_tags', sha: null, position: 0, total: commitsToProcess.length };
           const repositoryTags = await this.github.listTags(repository);
           const tagMap = new Map();
           for (const tag of repositoryTags) tagMap.set(tag.sha, [...(tagMap.get(tag.sha) ?? []), tag.name]);
-          await this.store.saveState(repository, { ...state, repository, defaultBranch: remote.default_branch, sync: { state: 'running', total: commits.length, startedAt: new Date().toISOString() }, lastError: null });
+          await this.store.saveState(repository, { ...state, repository, defaultBranch: remote.default_branch, sync: { state: 'running', total: commitsToProcess.length, startedAt: new Date().toISOString() }, lastError: null });
           let processed = 0; let failed = 0; let skipped = 0;
-          const orderedCommits = [...commits].reverse();
+          const orderedCommits = [...commitsToProcess].reverse();
           for (const [index, item] of orderedCommits.entries()) {
             const existing = await this.store.getCommitStatus(repository, item.sha);
             const commitMessage = item.commit?.message?.split('\n')[0] ?? '';
@@ -60,11 +64,11 @@ export class SyncService {
               processed += 1;
             } catch (error) {
               failed += 1;
-              await this.store.saveCommitStatus(repository, item.sha, { state: 'pending', attempts: (existing?.attempts ?? 0) + 1, lastAttemptAt: new Date().toISOString(), error: error.message });
+              await this.store.saveCommitStatus(repository, item.sha, { state: 'pending', attempts: (existing?.attempts ?? 0) + 1, lastAttemptAt: new Date().toISOString(), error: error.message, llmDiagnostics: error.llmOutput !== undefined ? { output: error.llmOutput, reasoning: error.llmReasoning, finishReason: error.llmFinishReason } : null });
             }
           }
-          await this.store.saveState(repository, { ...state, repository, defaultBranch: remote.default_branch, importSince: config.importSince, lastCheckedAt: new Date().toISOString(), processedCommits: state.processedCommits + processed, failedCommits: state.failedCommits + failed, sync: { state: failed ? 'completed_with_pending' : 'completed', total: commits.length, completedAt: new Date().toISOString() }, lastError: failed ? `${failed} commit(s) pendientes de análisis.` : null });
-          summary.repositories.push({ repository, found: commits.length, processed, skipped, failed });
+          await this.store.saveState(repository, { ...state, repository, defaultBranch: remote.default_branch, importSince: config.importSince, lastCheckedAt: new Date().toISOString(), processedCommits: state.processedCommits + processed, failedCommits: state.failedCommits + failed, sync: { state: failed ? 'completed_with_pending' : 'completed', total: commitsToProcess.length, completedAt: new Date().toISOString() }, lastError: failed ? `${failed} commit(s) pendientes de análisis.` : null });
+          summary.repositories.push({ repository, found: commitsToProcess.length, processed, skipped, failed });
         } catch (error) {
           await this.store.saveState(repository, { ...state, repository, sync: { state: 'error', total: state.sync?.total ?? 0, failedAt: new Date().toISOString() }, lastError: error.message });
           summary.errors.push({ repository, error: error.message });

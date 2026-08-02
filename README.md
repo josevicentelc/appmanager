@@ -289,9 +289,9 @@ ASANA_MAX_RETRIES=3
 ASANA_MAX_ATTACHMENT_BYTES=26214400
 ```
 
-Después de reiniciar, la configuración muestra los proyectos disponibles. Selecciona los que deban formar parte de la base de conocimiento y usa **Sincronizar Asana**. El ciclo periódico también sincroniza los proyectos seleccionados.
+Después de reiniciar, la configuración muestra los proyectos disponibles. Selecciona los que deban formar parte de la base de conocimiento, define **Incluir tareas creadas desde** y usa **Sincronizar Asana**. El ciclo periódico también sincroniza los proyectos seleccionados. Solo se digieren tareas cuyo `created_at` sea igual o posterior a esa fecha; el filtro se aplica localmente antes de descargar detalles, comentarios o adjuntos.
 
-Por tarea se conservan los datos crudos, descripción, responsables, fechas, campos personalizados, etiquetas, comentarios y eventos de cambio de estado. Se guarda además el inventario de adjuntos y se descargan localmente aquellos que Asana permite descargar, con un límite por fichero configurable. Los adjuntos de texto (`.txt`, `.md`, `.json`, `.csv`, `.log`, `.yaml`) se incorporan de forma acotada a la digestión; los binarios se conservan e inventarían, pero no se envían al LLM.
+Por tarea se conservan los datos crudos, descripción, responsables, fechas, campos personalizados, etiquetas, comentarios y eventos de cambio de estado. Se guarda además el inventario de adjuntos y se descargan localmente aquellos que Asana permite descargar, con un límite por fichero configurable. Los adjuntos de texto (`.txt`, `.md`, `.json`, `.csv`, `.log`, `.yaml`) se incorporan de forma acotada a la digestión; los binarios se conservan e inventarían, pero no se envían al LLM. Cuando se pregunta por un adjunto descargado, el chat puede mostrar imágenes PNG/JPEG/GIF/WebP/AVIF en línea y ofrece enlaces autenticados de descarga para documentos.
 
 La sincronización pagina la API y reintenta errores transitorios y límites de uso. Una tarea solo se vuelve a analizar cuando cambia `modified_at`, por lo que comentarios y cambios posteriores realimentan el conocimiento sin repetir trabajo innecesario.
 

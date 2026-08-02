@@ -58,3 +58,16 @@ test('paginates exhaustive commit searches and reports total coverage', async (c
   assert.equal(second.hasMore, false);
   assert.equal(second.nextOffset, null);
 });
+
+test('lists persisted commits that still need digestion', async (context) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'appmanager-pending-test-'));
+  context.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const store = new FileStore(directory);
+  const completedSha = 'a'.repeat(40);
+  const pendingSha = 'b'.repeat(40);
+  await store.saveCommit(repository, completedSha, { sha: completedSha, parents: [] }, '', null, { state: 'completed' });
+  await store.saveCommit(repository, pendingSha, { sha: pendingSha, parents: [] }, '', null, { state: 'pending' });
+
+  const pending = await store.listPendingCommits(repository);
+  assert.deepEqual(pending.map((commit) => commit.sha), [pendingSha]);
+});

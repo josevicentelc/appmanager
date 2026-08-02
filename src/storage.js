@@ -47,6 +47,16 @@ export class FileStore {
     try { return (await fs.readdir(path.join(this.repositoryDirectory(repository), 'commits'), { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => entry.name); }
     catch (error) { if (error.code === 'ENOENT') return []; throw error; }
   }
+  async listPendingCommits(repository) {
+    const pending = [];
+    for (const sha of await this.listCommitShas(repository)) {
+      const status = await this.getCommitStatus(repository, sha);
+      if (status?.state === 'completed') continue;
+      const raw = await this.getCommitRaw(repository, sha);
+      if (raw) pending.push(raw);
+    }
+    return pending;
+  }
   async getAnalysis(repository, sha) { return readJson(path.join(this.commitDirectory(repository, sha), 'analysis.json'), null); }
   async getDiff(repository, sha) {
     try { return await fs.readFile(path.join(this.commitDirectory(repository, sha), 'diff.patch'), 'utf8'); }

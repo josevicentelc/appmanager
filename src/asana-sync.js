@@ -1,4 +1,9 @@
 const textAttachment = (attachment) => attachment.downloaded && (attachment.contentType?.startsWith('text/') || /\.(txt|md|json|csv|log|ya?ml)$/i.test(attachment.name ?? ''));
+export const isCreatedSince = (task, importSince) => {
+  const createdAt = new Date(task?.created_at);
+  const cutoff = new Date(`${importSince}T00:00:00.000Z`);
+  return Number.isFinite(createdAt.getTime()) && Number.isFinite(cutoff.getTime()) && createdAt >= cutoff;
+};
 
 export class AsanaSyncService {
   constructor({ environment, store, asana, lmStudio, getConfig }) {
@@ -18,7 +23,9 @@ export class AsanaSyncService {
         const state = await this.store.getState(projectGid);
         try {
           this.current = { projectGid, stage: 'listing_tasks', position: 0, total: 0, taskGid: null };
-          const tasks = await this.asana.listProjectTasks(projectGid);
+          const allTasks = await this.asana.listProjectTasks(projectGid);
+          const importSince = this.getConfig().asanaImportSince;
+          const tasks = allTasks.filter((task) => isCreatedSince(task, importSince));
           await this.store.saveState(projectGid, { ...state, projectGid, sync: { state: 'running', total: tasks.length, startedAt: new Date().toISOString() }, lastError: null });
           let processed = 0; let skipped = 0; let failed = 0;
           for (const [index, compact] of tasks.entries()) {
@@ -51,17 +58,17 @@ export class AsanaSyncService {
               this.current = { projectGid, stage: 'digesting_task', position: index + 1, total: tasks.length, taskGid: compact.gid, taskName: task.name };
               const analysis = await this.lmStudio.analyzeAsanaTask({ model: this.getConfig().model, language: this.getConfig().language, project: { gid: projectGid, name: task.projects?.find((project) => project.gid === projectGid)?.name ?? null }, task, stories, attachments, attachmentText });
               analysis.schemaVersion = 1; analysis.source = 'asana'; analysis.project = { ...analysis.project, gid: projectGid, name: task.projects?.find((project) => project.gid === projectGid)?.name ?? analysis.project?.name ?? null };
-              analysis.task = { ...analysis.task, gid: task.gid, name: task.name, permalinkUrl: task.permalink_url, completed: task.completed, modifiedAt: task.modified_at, assigneeName: task.assignee?.name ?? null };
+              analysis.task = { ...analysis.task, gid: task.gid, name: task.name, permalinkUrl: task.permalink_url, createdAt: task.created_at ?? null, completed: task.completed, modifiedAt: task.modified_at, assigneeName: task.assignee?.name ?? null };
               this.current = { projectGid, stage: 'saving_analysis', position: index + 1, total: tasks.length, taskGid: compact.gid, taskName: task.name };
               await this.store.saveTask(projectGid, compact.gid, { analysis, status: { state: 'completed', remoteModifiedAt: compact.modified_at, attachments, attempts: (existing?.attempts ?? 0) + 1, processedAt: new Date().toISOString(), error: null } });
               processed += 1;
             } catch (error) {
               failed += 1;
-              await this.store.saveTask(projectGid, compact.gid, { status: { state: 'pending', remoteModifiedAt: compact.modified_at, attempts: (existing?.attempts ?? 0) + 1, lastAttemptAt: new Date().toISOString(), error: error.message } });
+              await this.store.saveTask(projectGid, compact.gid, { status: { state: 'pending', remoteModifiedAt: compact.modified_at, attempts: (existing?.attempts ?? 0) + 1, lastAttemptAt: new Date().toISOString(), error: error.message, llmDiagnostics: error.llmOutput !== undefined ? { output: error.llmOutput, reasoning: error.llmReasoning, finishReason: error.llmFinishReason } : null } });
             }
           }
           await this.store.saveState(projectGid, { ...state, projectGid, lastSyncedAt: new Date().toISOString(), processedTasks: (state.processedTasks ?? 0) + processed, failedTasks: (state.failedTasks ?? 0) + failed, sync: { state: failed ? 'completed_with_pending' : 'completed', total: tasks.length, completedAt: new Date().toISOString() }, lastError: failed ? `${failed} tarea(s) pendientes.` : null });
-          summary.projects.push({ projectGid, found: tasks.length, processed, skipped, failed });
+          summary.projects.push({ projectGid, found: tasks.length, excludedByCreatedAt: allTasks.length - tasks.length, processed, skipped, failed });
         } catch (error) {
           await this.store.saveState(projectGid, { ...state, projectGid, sync: { state: 'error', failedAt: new Date().toISOString() }, lastError: error.message });
           summary.errors.push({ projectGid, error: error.message });

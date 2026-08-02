@@ -4,6 +4,7 @@ let conversation = [];
 let chatBusy = false;
 let debugEvents = [];
 let currentAgentActivity = null;
+let currentThinking = '';
 
 async function api(path, options) {
   const response = await fetch(path, options);
@@ -15,7 +16,7 @@ async function api(path, options) {
   return data;
 }
 
-async function streamChat(payload, onDelta, onDebug, onActivity) {
+async function streamChat(payload, onDelta, onDebug, onActivity, onThinking, onAttachment) {
   const response = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
   if (!response.ok) {
     const data = await response.json();
@@ -33,6 +34,8 @@ async function streamChat(payload, onDelta, onDebug, onActivity) {
     if (type === 'delta') onDelta(value.text);
     if (type === 'debug') onDebug?.(value);
     if (type === 'activity') onActivity?.(value);
+    if (type === 'thinking') onThinking?.(value);
+    if (type === 'attachment') onAttachment?.(value.attachment);
     if (type === 'error') throw new Error(value.error || 'El flujo del modelo falló.');
   };
   while (true) {
@@ -58,7 +61,10 @@ function escapeHtml(value) {
 }
 
 function formatAssistantMessage(value) {
-  const inline = (text) => escapeHtml(text).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/`([^`\n]+)`/g, '<code>$1</code>');
+  const localAttachmentUrl = (url) => url
+    .replace(/https:\/\/storage\.googleapis\.com\/asana-attachments\/\d{1,30}\/(\d{1,30})(?:[?#][^\s)]*)?/g, '/api/asana/attachments/by-id/$1')
+    .replace(/https:\/\/app\.asana\.com\/api\/attachments\/\d{1,30}\/\d{1,30}\/(\d{1,30})(?:[?#][^\s)]*)?/g, '/api/asana/attachments/by-id/$1');
+  const inline = (text) => escapeHtml(localAttachmentUrl(text)).replace(/!\[([^\]]*)\]\((\/api\/asana\/attachments\/(?:by-id\/)?\d{1,30}(?:\/\d{1,30}\/\d{1,30})?)\)/g, '<img class="asana-attachment-image" src="$2" alt="$1" loading="lazy">').replace(/\[([^\]]+)\]\((\/api\/asana\/attachments\/(?:by-id\/)?\d{1,30}(?:\/\d{1,30}\/\d{1,30})?)\)/g, '<a class="asana-attachment-link" href="$2" target="_blank" rel="noopener noreferrer">$1</a>').replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/`([^`\n]+)`/g, '<code>$1</code>');
   return value.split('```').map((segment, index) => {
     if (index % 2) return `<pre><code>${escapeHtml(segment.replace(/^[\w+-]+\r?\n/, ''))}</code></pre>`;
     const output = [];
@@ -81,6 +87,14 @@ function formatAssistantMessage(value) {
     closeList();
     return output.join('');
   }).join('');
+}
+
+function formatAttachment(attachment) {
+  if (!attachment?.chatUrl || !attachment?.name) return '';
+  const name = escapeHtml(attachment.name);
+  const url = escapeHtml(attachment.chatUrl);
+  const downloadIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 19h14"/></svg>';
+  return attachment.inline ? `<figure class="attachment-preview"><img class="asana-attachment-image" src="${url}" alt="${name}" loading="lazy"><a class="attachment-download" href="${url}" download title="Descargar ${name}" aria-label="Descargar ${name}">${downloadIcon}</a></figure>` : `<a class="asana-attachment-link" href="${url}" download>Descargar ${name}</a>`;
 }
 
 const debugStageLabels = {
@@ -132,8 +146,11 @@ function renderMessages() {
     const streaming = item.role === 'assistant' && chatBusy && index === conversation.length - 1 && item.content;
     const content = waiting ? '<span class="typing" aria-label="AppManager está escribiendo"><i></i><i></i><i></i></span>' : item.role === 'assistant' ? formatAssistantMessage(item.content) : escapeHtml(item.content);
     const mode = item.role === 'assistant' ? ($('#chatMode').value === 'executive' ? 'Ejecutivo' : 'Developer') : '';
-    const activity = item.role === 'assistant' && chatBusy && index === conversation.length - 1 && currentAgentActivity ? `<div class="message-activity${currentAgentActivity.stage === 'client_error' || currentAgentActivity.stage === 'server_error' ? ' error' : ''}"><i></i><span>${escapeHtml(currentAgentActivity.message || currentAgentActivity.stage)}</span></div>` : '';
-    return `<div class="message-row ${item.role}${streaming ? ' streaming' : ''}"><div class="avatar">${item.role === 'user' ? userIcon : assistantIcon}</div><div class="message-content"><div class="message-meta">${item.role === 'user' ? 'Tú' : 'AppManager'}<span>${mode}</span></div><div class="message-body">${content}${activity}</div></div></div>`;
+    const isActiveAssistant = item.role === 'assistant' && chatBusy && index === conversation.length - 1;
+    const activity = isActiveAssistant && currentAgentActivity ? `<div class="message-activity${currentAgentActivity.stage === 'client_error' || currentAgentActivity.stage === 'server_error' ? ' error' : ''}"><i></i><span>${escapeHtml(currentAgentActivity.message || currentAgentActivity.stage)}</span></div>` : '';
+    const thinking = isActiveAssistant && currentThinking ? `<div class="thinking-bubble" aria-live="polite"><div class="thinking-label"><i></i><span>Razonando</span></div><p>${escapeHtml(currentThinking)}</p></div>` : '';
+    const attachments = item.role === 'assistant' ? (item.attachments ?? []).map(formatAttachment).join('') : '';
+    return `<div class="message-row ${item.role}${streaming ? ' streaming' : ''}"><div class="avatar">${item.role === 'user' ? userIcon : assistantIcon}</div><div class="message-content"><div class="message-meta">${item.role === 'user' ? 'Tú' : 'AppManager'}<span>${mode}</span></div><div class="message-body">${thinking}${content}${attachments}${activity}</div></div></div>`;
   }).join('');
   messages.scrollTop = messages.scrollHeight;
 }
@@ -150,6 +167,7 @@ async function load() {
   config = await api('/api/config');
   const [models, githubRepositories, asanaProjects] = await Promise.all([api('/api/models'), api('/api/github-repositories'), api('/api/asana-projects')]);
   $('#importSince').value = config.importSince;
+  $('#asanaImportSince').value = config.asanaImportSince;
   $('#interval').value = config.syncIntervalMinutes;
   $('#language').value = config.language;
   $('#model').innerHTML = '<option value="">Selecciona un modelo</option>' + models.models.map((id) => `<option ${id === config.model ? 'selected' : ''} value="${escapeHtml(id)}">${escapeHtml(id)}</option>`).join('');
@@ -167,7 +185,8 @@ async function refreshStatus() {
   $('#runStatus').textContent = running ? `Procesando ${status.sync.current?.repository ?? ''}…` : status.sync.lastRun ? `Última ejecución: ${new Date(status.sync.lastRun.completedAt).toLocaleString()}` : 'Todavía no se ha ejecutado ninguna sincronización.';
   const current = status.sync.current;
   const activityText = { checking_repository: 'GitHub: comprobando acceso al repositorio.', listing_commits: 'GitHub: consultando el historial de commits.', listing_tags: 'GitHub: consultando tags y versiones publicadas.', downloading_commit: 'GitHub: descargando metadatos y diff del commit.', digesting_commit: 'LM Studio: analizando el contexto y diff del commit.', saving_analysis: 'Almacenamiento local: guardando el análisis estructurado.', skipping_existing: 'Almacenamiento local: el commit ya estaba analizado; se omite.' };
-  $('#syncActivity').textContent = current ? `${activityText[current.stage] || 'Sincronizando.'} ${current.position ? `(${current.position}/${current.total}) ` : ''}${current.sha ? `${current.sha.slice(0, 12)}${current.message ? ` — ${current.message}` : ''}` : ''}` : 'No hay ninguna sincronización activa.';
+  const queueStatus = status.inferenceQueue?.active ? ` LM Studio: ${status.inferenceQueue.active}${status.inferenceQueue.pending ? ` · ${status.inferenceQueue.pending} en cola` : ''}.` : '';
+  $('#syncActivity').textContent = (current ? `${activityText[current.stage] || 'Sincronizando.'} ${current.position ? `(${current.position}/${current.total}) ` : ''}${current.sha ? `${current.sha.slice(0, 12)}${current.message ? ` — ${current.message}` : ''}` : ''}` : 'No hay ninguna sincronización activa.') + queueStatus;
   $('#syncButton').disabled = running;
   $('#asanaSyncButton').disabled = !status.asana?.configured || asanaRunning || !config.asanaProjects.length;
   $('#repositories').innerHTML = status.repositories.map((repo) => {
@@ -224,13 +243,15 @@ $('#chatForm').addEventListener('submit', async (event) => {
   $('#chatQuestion').value = '';
   $('#chatQuestion').style.height = 'auto';
   setChatBusy(true);
-  conversation.push({ role: 'assistant', content: '' });
+  conversation.push({ role: 'assistant', content: '', attachments: [] });
   debugEvents = [];
+  currentThinking = '';
   renderMessages();
   renderDebug();
   showAgentActivity({ stage: 'started', message: 'Preparando la consulta…' });
   try {
     await streamChat({ question, history, mode: $('#chatMode').value, debug: $('#debugMode').checked }, (text) => {
+      currentThinking = '';
       conversation[conversation.length - 1].content += text;
       renderMessages();
     }, (entry) => {
@@ -238,6 +259,14 @@ $('#chatForm').addEventListener('submit', async (event) => {
       renderDebug();
     }, (activity) => {
       showAgentActivity(activity);
+    }, (thinking) => {
+      currentThinking += thinking.text || '';
+      renderMessages();
+    }, (attachment) => {
+      if (!attachment?.chatUrl) return;
+      const attachments = conversation[conversation.length - 1].attachments;
+      if (!attachments.some((item) => item.chatUrl === attachment.chatUrl)) attachments.push(attachment);
+      renderMessages();
     });
   } catch (error) {
     conversation[conversation.length - 1].content = `No he podido responder: ${error.message}`;
@@ -249,6 +278,7 @@ $('#chatForm').addEventListener('submit', async (event) => {
   } finally {
     setChatBusy(false);
     currentAgentActivity = null;
+    currentThinking = '';
     renderMessages();
     $('#chatQuestion').focus();
   }
@@ -257,7 +287,7 @@ $('#chatForm').addEventListener('submit', async (event) => {
 $('#configForm').addEventListener('submit', async (event) => {
   event.preventDefault();
   try {
-    config = await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ importSince: $('#importSince').value, model: $('#model').value, syncIntervalMinutes: Number($('#interval').value), language: $('#language').value, repositories: [...document.querySelectorAll('#repositoryChoices input:checked')].map((input) => input.value), repositoryNotes: Object.fromEntries([...document.querySelectorAll('[data-repository-note]')].map((input) => [input.dataset.repositoryNote, input.value])), asanaProjects: [...document.querySelectorAll('#asanaProjectChoices input:checked')].map((input) => input.value) }) });
+    config = await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ importSince: $('#importSince').value, asanaImportSince: $('#asanaImportSince').value, model: $('#model').value, syncIntervalMinutes: Number($('#interval').value), language: $('#language').value, repositories: [...document.querySelectorAll('#repositoryChoices input:checked')].map((input) => input.value), repositoryNotes: Object.fromEntries([...document.querySelectorAll('[data-repository-note]')].map((input) => [input.dataset.repositoryNote, input.value])), asanaProjects: [...document.querySelectorAll('#asanaProjectChoices input:checked')].map((input) => input.value) }) });
     message(`${config.repositories.length} repositorio(s) y ${config.asanaProjects.length} proyecto(s) de Asana guardados.`);
     $('#chatContext').textContent = config.repositories.length ? `${config.repositories.length} repositorio(s) seleccionado(s) como fuente de conocimiento.` : 'Selecciona y sincroniza repositorios en Configuración para alimentar el chat.';
     await refreshStatus();

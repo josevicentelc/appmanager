@@ -30,7 +30,7 @@ export class AsanaClient {
         response.on('data', (chunk) => chunks.push(chunk));
         response.on('end', () => resolve({ status: response.statusCode ?? 0, headers: response.headers, data: Buffer.concat(chunks) }));
       });
-      request.on('timeout', () => request.destroy(new Error('Asana request timed out.')));
+      request.on('timeout', () => { const error = new Error('Asana request timed out.'); error.code = 'ETIMEDOUT'; request.destroy(error); });
       request.on('error', reject);
     });
   }
@@ -51,7 +51,7 @@ export class AsanaClient {
         throw new Error(`Asana ${response.status} ${url.pathname}: ${body.slice(0, 1_000)}`);
       } catch (error) {
         lastError = error;
-        if (attempt < this.maxRetries && (error.name === 'TimeoutError' || error.cause?.code === 'ECONNRESET' || error.cause?.code === 'ETIMEDOUT' || error.cause?.code === 'EAI_AGAIN')) {
+        if (attempt < this.maxRetries && (error.name === 'TimeoutError' || error.code === 'ECONNRESET' || error.code === 'ETIMEDOUT' || error.code === 'EAI_AGAIN' || error.cause?.code === 'ECONNRESET' || error.cause?.code === 'ETIMEDOUT' || error.cause?.code === 'EAI_AGAIN')) {
           await sleep(1_000 * 2 ** attempt);
           continue;
         }
@@ -74,7 +74,7 @@ export class AsanaClient {
     return this.list(`/workspaces/${this.workspaceId}/projects`, { opt_fields: 'gid,name,permalink_url,archived,created_at,modified_at' });
   }
   async listProjectTasks(projectGid) {
-    return this.list(`/projects/${projectGid}/tasks`, { completed_since: '1970-01-01T00:00:00.000Z', opt_fields: 'gid,name,modified_at,completed,completed_at,permalink_url' });
+    return this.list(`/projects/${projectGid}/tasks`, { completed_since: '1970-01-01T00:00:00.000Z', opt_fields: 'gid,name,created_at,modified_at,completed,completed_at,permalink_url' });
   }
   async getTask(taskGid) {
     const body = await this.request(`/tasks/${taskGid}`, {
