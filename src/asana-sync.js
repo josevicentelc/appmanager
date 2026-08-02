@@ -1,4 +1,14 @@
 const textAttachment = (attachment) => attachment.downloaded && (attachment.contentType?.startsWith('text/') || /\.(txt|md|json|csv|log|ya?ml)$/i.test(attachment.name ?? ''));
+const pullRequestUrl = /https?:\/\/github\.com\/([^/\s?#]+\/[^/\s?#]+)\/pull\/(\d+)(?:[/?#][^\s<]*)?/gi;
+const pullRequestsIn = (values) => {
+  const found = new Map();
+  for (const value of values) for (const match of String(value ?? '').matchAll(pullRequestUrl)) {
+    const repository = match[1]; const number = Number(match[2]);
+    if (Number.isSafeInteger(number) && number > 0) found.set(`${repository}#${number}`, { repository, number, url: `https://github.com/${repository}/pull/${number}` });
+  }
+  return [...found.values()];
+};
+const person = (value) => value ? { name: value.name ?? null, login: value.login ?? null, email: value.email ?? null } : null;
 export const isCreatedSince = (task, importSince) => {
   const createdAt = new Date(task?.created_at);
   const cutoff = new Date(`${importSince}T00:00:00.000Z`);
@@ -6,11 +16,28 @@ export const isCreatedSince = (task, importSince) => {
 };
 
 export class AsanaSyncService {
-  constructor({ environment, store, asana, lmStudio, getConfig }) {
-    this.environment = environment; this.store = store; this.asana = asana; this.lmStudio = lmStudio; this.getConfig = getConfig;
+  constructor({ environment, store, asana, github, pullRequestStore, lmStudio, getConfig }) {
+    this.environment = environment; this.store = store; this.asana = asana; this.github = github; this.pullRequestStore = pullRequestStore; this.lmStudio = lmStudio; this.getConfig = getConfig;
     this.running = false; this.current = null; this.lastRun = null;
   }
   status() { return { configured: this.asana.configured(), running: this.running, current: this.current, lastRun: this.lastRun }; }
+  async synchronizeTaskPullRequests(projectGid, task, stories) {
+    if (!this.github || !this.pullRequestStore) return [];
+    const references = pullRequestsIn([task?.notes, task?.html_notes, ...(stories ?? []).flatMap((story) => [story.text, story.html_text])]);
+    const saved = [];
+    for (const reference of references) {
+      const [pullRequest, commits] = await Promise.all([this.github.getPullRequest(reference.repository, reference.number), this.github.listPullRequestCommits(reference.repository, reference.number)]);
+      const prior = await this.pullRequestStore.get(reference.repository, reference.number);
+      const asanaTasks = [...new Map([...(prior?.asanaTasks ?? []), { projectGid, taskGid: String(task.gid), taskName: task.name ?? null }].map((item) => [`${item.projectGid}@${item.taskGid}`, item])).values()];
+      saved.push(await this.pullRequestStore.save({
+        schemaVersion: 1, repository: reference.repository, number: reference.number, url: reference.url,
+        pullRequest: { title: pullRequest.title ?? null, state: pullRequest.state ?? null, author: person(pullRequest.user), createdAt: pullRequest.created_at ?? null, updatedAt: pullRequest.updated_at ?? null, mergedAt: pullRequest.merged_at ?? null, mergeCommitSha: pullRequest.merge_commit_sha ?? null },
+        commits: commits.map((commit) => ({ sha: commit.sha, message: commit.commit?.message ?? null, author: person(commit.author) ?? person(commit.commit?.author), date: commit.commit?.author?.date ?? commit.commit?.committer?.date ?? null })),
+        asanaTasks, fetchedAt: new Date().toISOString()
+      }));
+    }
+    return saved;
+  }
   async run() {
     if (!this.asana.configured()) return { started: false, reason: 'Configura ASANA_TOKEN y ASANA_WORKSPACE_ID en .env.' };
     if (this.running) return { started: false, reason: 'Ya hay una sincronización de Asana en curso.' };
@@ -33,11 +60,18 @@ export class AsanaSyncService {
             if (existing?.state === 'completed' && existing.remoteModifiedAt === compact.modified_at) {
               skipped += 1;
               this.current = { projectGid, stage: 'skipping_existing', position: index + 1, total: tasks.length, taskGid: compact.gid, taskName: compact.name };
+              const [cachedTask, cachedStories] = await Promise.all([this.store.getTaskRaw(projectGid, compact.gid), this.store.getTaskStories(projectGid, compact.gid)]);
+              if (cachedTask) {
+                this.current = { projectGid, stage: 'syncing_pull_requests', position: index + 1, total: tasks.length, taskGid: compact.gid, taskName: compact.name };
+                try { await this.synchronizeTaskPullRequests(projectGid, cachedTask, cachedStories); } catch { /* A PR cache failure must not invalidate an already digested Asana task. */ }
+              }
               continue;
             }
             try {
               this.current = { projectGid, stage: 'downloading_task', position: index + 1, total: tasks.length, taskGid: compact.gid, taskName: compact.name };
               const [task, stories, attachmentRecords] = await Promise.all([this.asana.getTask(compact.gid), this.asana.getStories(compact.gid), this.asana.getAttachments(compact.gid)]);
+              this.current = { projectGid, stage: 'syncing_pull_requests', position: index + 1, total: tasks.length, taskGid: compact.gid, taskName: task.name };
+              try { await this.synchronizeTaskPullRequests(projectGid, task, stories); } catch { /* The Asana task itself remains usable when GitHub PR caching fails. */ }
               const attachments = [];
               const attachmentText = [];
               for (const attachment of attachmentRecords) {

@@ -46,6 +46,16 @@ export class GitHubClient {
     return commits;
   }
   async getCommit(repository, sha) { return (await this.request(`/repos/${repository}/commits/${sha}`)).json(); }
+  async getPullRequest(repository, number) { return (await this.request(`/repos/${repository}/pulls/${number}`)).json(); }
+  async listPullRequestCommits(repository, number) {
+    const commits = [];
+    for (let page = 1; page <= 20; page += 1) {
+      const batch = await (await this.request(`/repos/${repository}/pulls/${number}/commits?per_page=100&page=${page}`)).json();
+      commits.push(...batch);
+      if (batch.length < 100) break;
+    }
+    return commits;
+  }
   async getCommitDiff(repository, sha) { return (await this.request(`/repos/${repository}/commits/${sha}`, 'application/vnd.github.diff')).text(); }
   async getFileContent(repository, sha, filePath) {
     const encodedPath = filePath.split('/').map(encodeURIComponent).join('/');

@@ -196,16 +196,79 @@ async function refreshStatus() {
     return `<article><strong>${escapeHtml(repo.repository)}</strong><span>${progress.completed}/${progress.total} analizados · ${progress.pending} pendientes · ${progress.analyzing} en análisis</span><div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress.percentage}"><i style="width:${progress.percentage}%"></i></div><small>${progress.percentage}% · ${escapeHtml(description)}</small></article>`;
   }).join('');
   const asanaActivity = { listing_tasks: 'Asana: obteniendo tareas del proyecto.', downloading_task: 'Asana: descargando tarea, comentarios y adjuntos.', digesting_task: 'LM Studio: digiriendo la tarea de Asana.', saving_analysis: 'Almacenamiento local: guardando el conocimiento de Asana.', skipping_existing: 'Almacenamiento local: la tarea no ha cambiado; se omite.' };
+  asanaActivity.syncing_pull_requests = 'GitHub: actualizando la caché local de pull requests.';
   const asanaCurrent = status.asana?.current;
   $('#repositories').innerHTML += (status.asanaProjects ?? []).map(({ projectGid, state }) => `<article><strong>Asana · ${escapeHtml(projectGid)}</strong><span>${escapeHtml(state.sync?.state || 'pendiente')}</span><small>${escapeHtml(asanaCurrent?.projectGid === projectGid ? `${asanaActivity[asanaCurrent.stage] || 'Sincronizando.'} (${asanaCurrent.position || 0}/${asanaCurrent.total || 0})` : state.lastError || (state.lastSyncedAt ? `Sincronizado: ${new Date(state.lastSyncedAt).toLocaleString()}` : 'Pendiente de primera sincronización'))}</small></article>`).join('');
 }
 
-document.querySelectorAll('.tab').forEach((tab) => tab.addEventListener('click', () => {
-  const settings = tab.dataset.tab === 'settings';
-  $('#chatPanel').hidden = settings;
-  $('#settingsPanel').hidden = !settings;
-  document.querySelectorAll('.tab').forEach((button) => button.classList.toggle('active', button === tab));
+function showPanel(tabName) {
+  $('#chatPanel').hidden = tabName !== 'chat';
+  $('#reportsPanel').hidden = tabName !== 'reports';
+  $('#settingsPanel').hidden = tabName !== 'settings';
+  document.querySelectorAll('[data-tab]').forEach((button) => button.classList.toggle('active', button.dataset.tab === tabName));
+}
+
+document.querySelectorAll('[data-tab]').forEach((tab) => tab.addEventListener('click', () => showPanel(tab.dataset.tab)));
+
+function isoDate(date) { return date.toISOString().slice(0, 10); }
+
+function initializeReportDates() {
+  const today = new Date();
+  const currentDay = isoDate(today);
+  const firstDayOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+  const lastDayOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+  $('#executiveReportFrom').value = isoDate(firstDayOfMonth);
+  $('#executiveReportTo').value = isoDate(lastDayOfMonth);
+  $('#dailyReportFrom').value = currentDay;
+  $('#dailyReportTo').value = currentDay;
+}
+
+const reportContent = {
+  executive: {
+    title: 'Informe ejecutivo',
+    description: 'Configura el período para obtener una visión global de la evolución del proyecto.'
+  },
+  daily: {
+    title: 'Informe diario',
+    description: 'Configura el período y, si lo necesitas, filtra la actividad por un usuario concreto.'
+  }
+};
+
+document.querySelectorAll('[data-report]').forEach((button) => button.addEventListener('click', () => {
+  const report = button.dataset.report;
+  const details = reportContent[report];
+  $('#executiveReportForm').hidden = report !== 'executive';
+  $('#dailyReportForm').hidden = report !== 'daily';
+  $('#reportTitle').textContent = details.title;
+  $('#reportDescription').textContent = details.description;
+  document.querySelectorAll('[data-report]').forEach((option) => {
+    const active = option === button;
+    option.classList.toggle('active', active);
+    option.setAttribute('aria-selected', String(active));
+  });
 }));
+
+initializeReportDates();
+
+$('#executiveReportForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const from = $('#executiveReportFrom').value;
+  const to = $('#executiveReportTo').value;
+  const status = $('#executiveReportStatus');
+  const button = event.currentTarget.querySelector('button[type="submit"]');
+  if (!from || !to || from > to) { status.textContent = 'Selecciona un rango de fechas válido.'; status.className = 'report-download-status error'; return; }
+  button.disabled = true; status.textContent = 'Preparando el Markdown…'; status.className = 'report-download-status';
+  try {
+    const response = await fetch('/api/reports/executive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from, to }) });
+    if (!response.ok) { const data = await response.json(); throw new Error(data.error || 'No se pudo generar el informe.'); }
+    const file = await response.blob();
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(file); link.download = `informe-ejecutivo-${from}_a_${to}.md`; link.click();
+    URL.revokeObjectURL(link.href);
+    status.textContent = 'Descarga iniciada.'; status.className = 'report-download-status success';
+  } catch (error) { status.textContent = error.message; status.className = 'report-download-status error'; }
+  finally { button.disabled = false; }
+});
 
 $('#newChatButton').addEventListener('click', () => { conversation = []; debugEvents = []; currentAgentActivity = null; $('#agentActivity').hidden = true; renderMessages(); renderDebug(); $('#chatQuestion').focus(); });
 

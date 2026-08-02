@@ -26,6 +26,7 @@
       <nav class="tabs" aria-label="Secciones">
         <button class="tab active" data-tab="chat"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 10h8M8 14h5M5 20l2.5-3H18a3 3 0 0 0 3-3V6a3 3 0 0 0-3-3H6a3 3 0 0 0-3 3v8a3 3 0 0 0 3 3v3Z"/></svg>Chat</button>
         <button class="tab" data-tab="settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg>Configuración</button><button id="logoutButton" class="tab">Salir</button>
+        <button class="tab" data-tab="reports"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l3 3v15H6z"/><path d="M15 3v4h4M9 11h6M9 15h6M9 19h4"/></svg>Informes</button>
       </nav>
     </header>
 
@@ -53,6 +54,39 @@
               <button id="sendButton" type="submit" aria-label="Enviar mensaje"><span>Enviar</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 14-7-4 14-3-6-7-1Z"/><path d="m12 13 7-8"/></svg></button>
             </form>
             <p class="composer-hint"><kbd>Enter</kbd> para enviar <span>·</span> <kbd>Shift</kbd> + <kbd>Enter</kbd> para nueva línea</p>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section id="reportsPanel" class="panel reports-panel" hidden>
+      <div class="reports-layout">
+        <aside class="reports-sidebar">
+          <div class="sidebar-heading"><span class="section-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l3 3v15H6z"/><path d="M15 3v4h4M9 11h6M9 15h6M9 19h4"/></svg></span><div><h2>Informes</h2><p>Conocimiento local</p></div></div>
+          <p class="reports-sidebar-label">TIPO DE INFORME</p>
+          <div class="report-options" role="tablist" aria-label="Tipos de informe">
+            <button class="report-option active" type="button" data-report="executive" role="tab" aria-selected="true"><span class="report-option-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V9m5 10V5m5 14v-7m5 7V3"/></svg></span><span><strong>Informe ejecutivo</strong><small>Visión global y evolución</small></span></button>
+            <button class="report-option" type="button" data-report="daily" role="tab" aria-selected="false"><span class="report-option-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M8 3v4m8-4v4M4 10h16M8 14h3m-3 3h6"/></svg></span><span><strong>Informe diario</strong><small>Actividad por fecha y usuario</small></span></button>
+          </div>
+          <p class="privacy-note"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10V8a5 5 0 0 1 10 0v2M5 10h14v11H5z"/></svg>Los informes usarán datos locales</p>
+        </aside>
+        <section class="reports-card">
+          <div class="reports-header"><div><p class="eyebrow">GENERACIÓN DE INFORMES</p><h1 id="reportTitle">Informe ejecutivo</h1><p id="reportDescription">Configura el período para obtener una visión global de la evolución del proyecto.</p></div><span class="report-status">Próximamente</span></div>
+          <div class="report-content">
+            <form id="executiveReportForm" class="report-form" novalidate>
+              <div class="report-form-heading"><h2>Período del informe</h2><p>El rango inicial cubre el mes en curso.</p></div>
+              <label>Desde<input id="executiveReportFrom" type="date"></label>
+              <label>Hasta<input id="executiveReportTo" type="date"></label>
+              <p class="report-note">La generación de informes estará disponible próximamente.</p>
+              <button class="report-download" type="submit">Descargar borrador Markdown<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 19h14"/></svg></button><span id="executiveReportStatus" class="report-download-status" role="status"></span>
+            </form>
+            <form id="dailyReportForm" class="report-form" hidden novalidate>
+              <div class="report-form-heading"><h2>Período y responsable</h2><p>El rango inicial corresponde al día de hoy.</p></div>
+              <label>Desde<input id="dailyReportFrom" type="date"></label>
+              <label>Hasta<input id="dailyReportTo" type="date"></label>
+              <label class="report-user-field">Usuario <span>Opcional</span><input id="dailyReportUser" type="text" maxlength="200" placeholder="Nombre, correo o usuario de GitHub"></label>
+              <p class="report-note">La generación de informes estará disponible próximamente.</p>
+            </form>
           </div>
         </section>
       </div>
