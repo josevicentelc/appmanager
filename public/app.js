@@ -257,13 +257,13 @@ $('#executiveReportForm').addEventListener('submit', async (event) => {
   const status = $('#executiveReportStatus');
   const button = event.currentTarget.querySelector('button[type="submit"]');
   if (!from || !to || from > to) { status.textContent = 'Selecciona un rango de fechas válido.'; status.className = 'report-download-status error'; return; }
-  button.disabled = true; status.textContent = 'Preparando el Markdown…'; status.className = 'report-download-status';
+  button.disabled = true; status.textContent = 'Preparando el PDF…'; status.className = 'report-download-status';
   try {
     const response = await fetch('/api/reports/executive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from, to }) });
     if (!response.ok) { const data = await response.json(); throw new Error(data.error || 'No se pudo generar el informe.'); }
     const file = await response.blob();
     const link = document.createElement('a');
-    link.href = URL.createObjectURL(file); link.download = `informe-ejecutivo-${from}_a_${to}.md`; link.click();
+    link.href = URL.createObjectURL(file); link.download = `informe-ejecutivo-${from}_a_${to}.pdf`; link.click();
     URL.revokeObjectURL(link.href);
     status.textContent = 'Descarga iniciada.'; status.className = 'report-download-status success';
   } catch (error) { status.textContent = error.message; status.className = 'report-download-status error'; }

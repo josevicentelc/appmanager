@@ -141,11 +141,12 @@ export class LMStudioClient {
     if (!message) throw new Error('LM Studio did not return a planning message.');
     return { ...message, _debug: { finishReason: body.choices?.[0]?.finish_reason, usage: body.usage } };
   }
-  async streamChat({ model, messages, onDelta, onThinking, tools, toolChoice }) {
+  async streamChat({ model, messages, onDelta, onThinking, tools, toolChoice, maxTokens = 4096, timeoutMs = 180_000 }) {
     if (!model) throw new Error('Selecciona un modelo de LM Studio en Configuración antes de iniciar un chat.');
+    const signal = AbortSignal.timeout(Math.max(10_000, timeoutMs));
     const response = await fetch(`${this.baseUrl}/chat/completions`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, messages, temperature: 0.3, stream: true, ...(tools?.length ? { tools, tool_choice: toolChoice ?? 'auto' } : {}) })
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal,
+      body: JSON.stringify({ model, messages, temperature: 0.3, stream: true, max_tokens: Math.max(256, Math.min(Number(maxTokens) || 4096, 8192)), ...(tools?.length ? { tools, tool_choice: toolChoice ?? 'auto' } : {}) })
     });
     if (!response.ok) throw new Error(`LM Studio ${response.status}: ${await response.text()}`);
     if (!response.body) throw new Error('LM Studio no inició un flujo de respuesta.');

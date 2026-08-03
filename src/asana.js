@@ -78,7 +78,7 @@ export class AsanaClient {
   }
   async getTask(taskGid) {
     const body = await this.request(`/tasks/${taskGid}`, {
-      opt_fields: 'gid,name,notes,html_notes,permalink_url,created_at,modified_at,completed,completed_at,completed_by.name,assignee.gid,assignee.name,assignee_status,due_on,due_at,start_on,start_at,resource_subtype,projects.gid,projects.name,memberships.project.gid,memberships.project.name,memberships.section.gid,memberships.section.name,tags.gid,tags.name,custom_fields.gid,custom_fields.name,custom_fields.display_value,custom_fields.text_value,custom_fields.number_value,custom_fields.enum_value.name,followers.gid,followers.name,parent.gid,parent.name,dependencies.gid,dependents.gid'
+      opt_fields: 'gid,name,notes,html_notes,permalink_url,created_at,modified_at,completed,completed_at,completed_by.name,created_by.gid,created_by.name,assignee.gid,assignee.name,assignee_status,due_on,due_at,start_on,start_at,resource_subtype,projects.gid,projects.name,memberships.project.gid,memberships.project.name,memberships.section.gid,memberships.section.name,tags.gid,tags.name,custom_fields.gid,custom_fields.name,custom_fields.display_value,custom_fields.text_value,custom_fields.number_value,custom_fields.enum_value.name,followers.gid,followers.name,parent.gid,parent.name,dependencies.gid,dependents.gid'
     });
     return body.data;
   }

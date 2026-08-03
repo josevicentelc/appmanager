@@ -15,6 +15,8 @@ import { AsanaStore } from './asana-storage.js';
 import { AsanaSyncService } from './asana-sync.js';
 import { PullRequestStore } from './pr-storage.js';
 import { ExecutiveReportService } from './reports.js';
+import { markdownPdf } from './pdf.js';
+import { temporalScope } from './date-range.js';
 import { LocalAuthenticator } from './auth.js';
 import { InferenceQueue, QueuedLMStudioClient } from './inference-queue.js';
 
@@ -360,13 +362,8 @@ async function sendAsanaAttachment(response, projectGid, taskGid, attachment) {
   response.end(data);
 }
 
-function temporalScope(question) {
-  const years = [...new Set((String(question).match(/\b20\d{2}\b/g) ?? []).map(Number))].sort();
-  if (!years.length) return null;
-  return { from: `${years[0]}-01-01`, to: `${years.at(-1)}-12-31` };
-}
-
 const isTemporalReport = (question, scope) => Boolean(scope && /\b(informe|cambi(?:o|ó|os|aron)|resumen|evoluci[oó]n|historial|report|changes?|changed|summary|evolution|history)\b/i.test(String(question)));
+const needsTemporalClassification = (question) => /\b(servidor|server|backend|frontend|seguridad|security|rendimiento|performance)\b/i.test(String(question));
 
 function ragSystemPrompt(mode, language, overview, initialContext) {
   const languageName = language === 'en' ? 'English' : 'Spanish';
@@ -407,7 +404,7 @@ function appendTaskDetails(lines, task) {
     for (const comment of comments.slice(0, 8)) lines.push(`  - ${comment.author ? `${markdownText(comment.author)}: ` : ''}${markdownText(comment.text)}`);
   }
 }
-function executiveReportMarkdown(report) {
+function legacyExecutiveReportMarkdown(report) {
   const lines = [`# Informe ejecutivo`, '', `Período: ${report.period.from} a ${report.period.to}`, '', '## Cobertura', '', `- Commits encontrados: ${report.coverage.commits}`, `- Tareas de Asana con actividad: ${report.coverage.activeAsanaTasks}`, `- Pull requests cacheados: ${report.coverage.cachedPullRequests}`, `- Asociaciones verificadas Asana/commit: ${report.coverage.pairedCommits}`, '', '## Actividad cronológica', ''];
   if (!report.entries.length) lines.push('No hay actividad local sincronizada para el período indicado.');
   for (const entry of report.entries) {
@@ -427,6 +424,51 @@ function executiveReportMarkdown(report) {
       lines.push(`### ${date} — ${markdownText(entry.task.task.name)}`);
       lines.push('- Actividad de Asana sin commit asociado en el período.');
       appendTaskDetails(lines, entry.task);
+    }
+    lines.push('');
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+function appendReadableTaskDetails(lines, task) {
+  const analysis = task.analysis ?? {};
+  const author = task.createdBy ?? task.task?.created_by?.name ?? null;
+  if (author) lines.push(`Autor de la tarea: ${markdownText(author)}`, '');
+  const description = analysis.briefDescription || analysis.objective || task.task?.notes;
+  if (description) lines.push(`Resumen de la tarea: ${markdownText(description).slice(0, 900)}`, '');
+  const transitions = task.activity.filter((activity) => activity.type === 'status_change').map(statusTransition).filter((transition) => transition.from || transition.to);
+  const stages = [];
+  for (const transition of transitions) {
+    if (transition.from && stages.at(-1) !== transition.from) stages.push(transition.from);
+    if (transition.to && stages.at(-1) !== transition.to) stages.push(transition.to);
+  }
+  if (stages.length === 1) lines.push(`Estado durante el período: ${markdownText(stages[0])}`, '');
+  if (stages.length > 1) lines.push(`Avance durante el período: ${markdownText(stages[0])} → ${markdownText(stages.at(-1))}`, '');
+  if (analysis.objective && analysis.objective !== description) lines.push(`Objetivo: ${markdownText(analysis.objective).slice(0, 600)}`, '');
+  if (analysis.statusSummary) lines.push(`Estado actual: ${markdownText(analysis.statusSummary).slice(0, 500)}`, '');
+  const workPerformed = listValue(analysis.workPerformed);
+  if (workPerformed.length) lines.push(`Trabajo registrado: ${workPerformed.slice(0, 6).map(markdownText).join('; ')}`, '');
+  const comments = task.activity.filter((activity) => activity.type === 'comment' && activity.text);
+  if (comments.length) {
+    lines.push('Comentarios de Asana:');
+    for (const comment of comments.slice(0, 8)) lines.push(`    ${comment.author ? `${markdownText(comment.author)}: ` : ''}${markdownText(comment.text)}`);
+    lines.push('');
+  }
+}
+function executiveReportMarkdown(report) {
+  const lines = ['# Informe ejecutivo', '', `Período: ${report.period.from} a ${report.period.to}`, '', '## Cobertura', '', `Commits encontrados: ${report.coverage.commits}`, `Tareas de Asana con actividad: ${report.coverage.activeAsanaTasks}`, `Pull requests cacheados: ${report.coverage.cachedPullRequests}`, `Asociaciones verificadas Asana/commit: ${report.coverage.pairedCommits}`, '', '## Actividad cronológica', ''];
+  if (!report.entries.length) lines.push('No hay actividad local sincronizada para el período indicado.');
+  for (const entry of report.entries) {
+    const date = String(entry.date ?? '').slice(0, 10) || 'Sin fecha';
+    if (entry.type === 'asana_commit') {
+      lines.push(`### ${date} — ${markdownText(entry.task.task.name)}`);
+      appendReadableTaskDetails(lines, entry.task);
+      lines.push(`Commit asociado: ${markdownText(entry.commit.repository)}@${entry.commit.sha.slice(0, 12)}`, `Autor del commit: ${markdownText(entry.commit.author.name || entry.commit.author.login || 'No disponible')}`, `Pull request: #${entry.pullRequest.number}${entry.pullRequest.pullRequest?.title ? ` — ${markdownText(entry.pullRequest.pullRequest.title)}` : ''}`, `Descripción del commit: ${markdownText(entry.commit.originalMessage || entry.commit.briefDescription)}`);
+    } else if (entry.type === 'commit') {
+      lines.push(`### ${date} — ${markdownText(entry.commit.repository)}@${entry.commit.sha.slice(0, 12)}`, `Autor del commit: ${markdownText(entry.commit.author.name || entry.commit.author.login || 'No disponible')}`, `Descripción del commit: ${markdownText(entry.commit.originalMessage || entry.commit.briefDescription)}`, 'No se encontró una tarea de Asana relacionada en la caché local de pull requests.');
+    } else {
+      lines.push(`### ${date} — ${markdownText(entry.task.task.name)}`);
+      appendReadableTaskDetails(lines, entry.task);
     }
     lines.push('');
   }
@@ -496,10 +538,11 @@ const server = http.createServer(async (request, response) => {
       const from = String(input.from ?? ''); const to = String(input.to ?? '');
       if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) return sendJson(response, 400, { error: 'Selecciona un rango de fechas válido.' });
       const report = await executiveReports.collect({ repositories: appConfig.repositories, projectGids: appConfig.asanaProjects ?? [], from, to });
-      const filename = `informe-ejecutivo-${from}_a_${to}.md`;
+      const filename = `informe-ejecutivo-${from}_a_${to}.pdf`;
       const markdown = executiveReportMarkdown(report);
-      response.writeHead(200, { 'Content-Type': 'text/markdown; charset=utf-8', 'Content-Disposition': `attachment; filename="${filename}"`, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
-      return response.end(markdown);
+      const pdf = markdownPdf(markdown);
+      response.writeHead(200, { 'Content-Type': 'application/pdf', 'Content-Length': pdf.length, 'Content-Disposition': `attachment; filename="${filename}"`, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+      return response.end(pdf);
     }
     if (request.method === 'POST' && url.pathname === '/api/chat') {
       const input = await body(request);
@@ -512,6 +555,7 @@ const server = http.createServer(async (request, response) => {
       const history = Array.isArray(input.history) ? input.history.slice(-12).map((item) => ({ role: item.role === 'assistant' ? 'assistant' : 'user', content: String(item.content ?? '').slice(0, 8000) })).filter((item) => item.content.trim()) : [];
       const scope = temporalScope(question);
       const agenticReport = isTemporalReport(question, scope);
+      const automaticClassification = agenticReport && needsTemporalClassification(question);
       const temporalCandidates = agenticReport ? await store.rankAnalyses(appConfig.repositories, { query: '', ...scope }) : null;
       const initialPage = agenticReport
         ? { results: temporalCandidates.slice(0, 50), totalMatches: temporalCandidates.length, hasMore: temporalCandidates.length > 50, nextOffset: temporalCandidates.length > 50 ? 50 : null }
@@ -534,7 +578,7 @@ const server = http.createServer(async (request, response) => {
         activity('director_started', { message: 'El director está analizando la petición.' });
         let rounds = 0;
         let delegatedReport = null;
-        if (agenticReport && temporalCandidates.length) {
+        if (automaticClassification && temporalCandidates.length) {
           activity('director_delegating', { message: `El director delega la clasificación de ${temporalCandidates.length} commits.` });
           const agentActivity = (details) => {
             const { llmOutput, llmReasoning, ...activityDetails } = details;
@@ -580,7 +624,7 @@ const server = http.createServer(async (request, response) => {
         trace('final_generation_started', { planningRounds: rounds, messageCount: messages.length });
         activity('final_generation_started', { message: 'El director está redactando la respuesta final.' });
         const generationStarted = Date.now();
-        messages.push({ role: 'system', content: 'Tool use is finished. Write the final answer for the user using the evidence already present in this conversation. Do not call, describe, imitate, or emit tool syntax. Never output XML or tags such as <tool_call>; provide a clear natural-language answer instead.' });
+        messages.push({ role: 'system', content: 'Tool use is finished. Write the final answer for the user using the evidence already present in this conversation. Keep the answer concise and under 1,800 words. Do not call, describe, imitate, or emit tool syntax. Never output XML or tags such as <tool_call>; provide a clear natural-language answer instead.' });
         let initialFinalText = ''; let finalTextStarted = false; let discardedToolSyntax = false;
         const finalDelta = (text) => {
           if (discardedToolSyntax) return;

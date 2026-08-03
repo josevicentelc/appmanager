@@ -23,7 +23,8 @@ export class ExecutiveReportService {
         type: isComment(story) ? 'comment' : 'status_change', date: story.created_at, author: story.created_by?.name ?? null,
         text: story.text ?? null, from: story.old_value ?? null, to: story.new_value ?? story.section?.name ?? null
       }));
-      if (task && activity.length) tasks.set(taskKey(projectGid, taskGid), { projectGid, taskGid, task, analysis, activity });
+      const createdBy = task?.created_by?.name ?? stories.find((story) => story.new_name === task?.name || /\badded the name\b/i.test(String(story.text ?? '')))?.created_by?.name ?? null;
+      if (task && activity.length) tasks.set(taskKey(projectGid, taskGid), { projectGid, taskGid, task, analysis, activity, createdBy });
     }
 
     const pullRequestsByCommit = new Map();
