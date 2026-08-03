@@ -1,0 +1,109 @@
+const inRange = (value, from, to) => {
+  const date = String(value ?? '');
+  return Boolean(date) && date >= `${from}T00:00:00.000Z` && date <= `${to}T23:59:59.999Z`;
+};
+const isComment = (story) => story?.resource_subtype === 'comment_added' || story?.type === 'comment';
+const isStatusChange = (story) => /(?:section|status)_/i.test(String(story?.resource_subtype ?? ''))
+  || (story?.type === 'system' && Boolean(story?.section || story?.new_value || story?.old_value));
+const taskKey = (projectGid, taskGid) => `${projectGid}@${taskGid}`;
+const commitAuthor = (raw) => ({
+  name: raw?.commit?.author?.name ?? raw?.author?.login ?? null,
+  login: raw?.author?.login ?? null,
+  email: raw?.commit?.author?.email ?? null
+});
+
+/** Collects deterministic Asana, PR and commit evidence for an executive report. */
+export class ExecutiveReportService {
+  constructor({ store, asanaStore, pullRequestStore }) {
+    this.store = store;
+    this.asanaStore = asanaStore;
+    this.pullRequestStore = pullRequestStore;
+  }
+
+  async collect({ repositories, projectGids, from, to }) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) throw new Error('El rango del informe no es válido.');
+    const [commitReferences, pullRequests] = await Promise.all([
+      this.store.rankAnalyses(repositories, { query: '', from, to }),
+      this.pullRequestStore.list()
+    ]);
+    const tasks = await this.#activeTasks(projectGids, from, to);
+    const pullRequestsByCommit = this.#indexPullRequestsByCommit(pullRequests);
+    const entries = await this.#combineEvidence(commitReferences, tasks, pullRequestsByCommit);
+
+    return {
+      period: { from, to },
+      entries,
+      coverage: {
+        commits: commitReferences.length,
+        activeAsanaTasks: tasks.size,
+        cachedPullRequests: pullRequests.length,
+        pairedCommits: entries.filter((entry) => entry.type === 'asana_commit').length
+      }
+    };
+  }
+
+  async #activeTasks(projectGids, from, to) {
+    const tasks = new Map();
+    for (const projectGid of projectGids) {
+      for (const taskGid of await this.asanaStore.listTaskGids(projectGid)) {
+        const [task, stories, analysis] = await Promise.all([
+          this.asanaStore.getTaskRaw(projectGid, taskGid),
+          this.asanaStore.getTaskStories(projectGid, taskGid),
+          this.asanaStore.getTaskAnalysis(projectGid, taskGid)
+        ]);
+        const activity = stories
+          .filter((story) => inRange(story.created_at, from, to) && (isComment(story) || isStatusChange(story)))
+          .map((story) => ({
+            type: isComment(story) ? 'comment' : 'status_change',
+            date: story.created_at,
+            author: story.created_by?.name ?? null,
+            text: story.text ?? null,
+            from: story.old_value ?? null,
+            to: story.new_value ?? story.section?.name ?? null
+          }));
+        const createdBy = task?.created_by?.name
+          ?? stories.find((story) => story.new_name === task?.name || /\badded the name\b/i.test(String(story.text ?? '')))?.created_by?.name
+          ?? null;
+        if (task && activity.length) tasks.set(taskKey(projectGid, taskGid), { projectGid, taskGid, task, analysis, activity, createdBy });
+      }
+    }
+    return tasks;
+  }
+
+  #indexPullRequestsByCommit(pullRequests) {
+    const index = new Map();
+    for (const pullRequest of pullRequests) {
+      const commitShas = new Set([...(pullRequest.commits ?? []).map((commit) => commit.sha), pullRequest.pullRequest?.mergeCommitSha].filter(Boolean));
+      for (const sha of commitShas) {
+        const key = `${pullRequest.repository}@${sha}`;
+        const matches = index.get(key) ?? [];
+        matches.push(pullRequest);
+        index.set(key, matches);
+      }
+    }
+    return index;
+  }
+
+  async #combineEvidence(commitReferences, tasks, pullRequestsByCommit) {
+    const entries = [];
+    const matchedTaskKeys = new Set();
+    for (const reference of commitReferences) {
+      const raw = await this.store.getCommitRaw(reference.repository, reference.sha);
+      const commit = { ...reference, author: commitAuthor(raw) };
+      const commitPullRequests = pullRequestsByCommit.get(`${reference.repository}@${reference.sha}`) ?? [];
+      const relatedTasks = commitPullRequests
+        .flatMap((pullRequest) => (pullRequest.asanaTasks ?? []).map((relation) => ({ pullRequest, task: tasks.get(taskKey(relation.projectGid, relation.taskGid)) })))
+        .filter(({ task }) => task);
+      if (!relatedTasks.length) entries.push({ type: 'commit', date: reference.commitDate, commit, pullRequests: commitPullRequests });
+      for (const related of relatedTasks) {
+        matchedTaskKeys.add(taskKey(related.task.projectGid, related.task.taskGid));
+        entries.push({ type: 'asana_commit', date: reference.commitDate, task: related.task, commit, pullRequest: related.pullRequest });
+      }
+    }
+    for (const [key, task] of tasks) {
+      if (!matchedTaskKeys.has(key)) entries.push({ type: 'asana', date: task.activity.at(-1)?.date ?? task.task.modified_at, task });
+    }
+    entries.sort((left, right) => String(left.date ?? '').localeCompare(String(right.date ?? '')) || left.type.localeCompare(right.type));
+    return entries;
+  }
+}

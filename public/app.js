@@ -1,3 +1,6 @@
+import { initializeReports } from './reports-ui.js';
+import { createApiClient } from './client-api.js';
+
 const $ = (selector) => document.querySelector(selector);
 let config;
 let conversation = [];
@@ -6,48 +9,7 @@ let debugEvents = [];
 let currentAgentActivity = null;
 let currentThinking = '';
 
-async function api(path, options) {
-  const response = await fetch(path, options);
-  const data = await response.json();
-  if (!response.ok) {
-    if (response.status === 401 && path !== '/api/auth/login') showLogin();
-    throw new Error(data.error || 'Error inesperado');
-  }
-  return data;
-}
-
-async function streamChat(payload, onDelta, onDebug, onActivity, onThinking, onAttachment) {
-  const response = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-  if (!response.ok) {
-    const data = await response.json();
-    throw new Error(data.error || 'Error inesperado');
-  }
-  if (!response.body) throw new Error('El navegador no pudo recibir el flujo de respuesta.');
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let pending = '';
-  const consume = (event) => {
-    const type = event.match(/^event:\s*(.+)$/m)?.[1] || 'message';
-    const data = event.match(/^data:\s*(.+)$/m)?.[1];
-    if (!data) return;
-    const value = JSON.parse(data);
-    if (type === 'delta') onDelta(value.text);
-    if (type === 'debug') onDebug?.(value);
-    if (type === 'activity') onActivity?.(value);
-    if (type === 'thinking') onThinking?.(value);
-    if (type === 'attachment') onAttachment?.(value.attachment);
-    if (type === 'error') throw new Error(value.error || 'El flujo del modelo falló.');
-  };
-  while (true) {
-    const { value, done } = await reader.read();
-    pending += decoder.decode(value || new Uint8Array(), { stream: !done });
-    const events = pending.split(/\r?\n\r?\n/);
-    pending = events.pop();
-    events.forEach(consume);
-    if (done) break;
-  }
-  if (pending.trim()) consume(pending);
-}
+const { api, streamChat } = createApiClient(() => showLogin());
 
 function message(text, error = false) {
   $('#formStatus').textContent = text;
@@ -213,100 +175,7 @@ function showPanel(tabName) {
 
 document.querySelectorAll('[data-tab]').forEach((tab) => tab.addEventListener('click', () => showPanel(tab.dataset.tab)));
 
-function isoDate(date) { return date.toISOString().slice(0, 10); }
-
-function initializeReportDates() {
-  const today = new Date();
-  const currentDay = isoDate(today);
-  const firstDayOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-  const lastDayOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
-  $('#executiveReportFrom').value = isoDate(firstDayOfMonth);
-  $('#executiveReportTo').value = isoDate(lastDayOfMonth);
-  $('#dailyReportFrom').value = currentDay;
-  $('#dailyReportTo').value = currentDay;
-}
-
-const reportContent = {
-  executive: {
-    title: 'Informe ejecutivo',
-    description: 'Configura el período para obtener una visión global de la evolución del proyecto.'
-  },
-  daily: {
-    title: 'Informe diario',
-    description: 'Configura el período y, si lo necesitas, filtra la actividad por un usuario concreto.'
-  }
-};
-
-document.querySelectorAll('[data-report]').forEach((button) => button.addEventListener('click', () => {
-  const report = button.dataset.report;
-  const details = reportContent[report];
-  $('#executiveReportForm').hidden = report !== 'executive';
-  $('#dailyReportForm').hidden = report !== 'daily';
-  $('#reportTitle').textContent = details.title;
-  $('#reportDescription').textContent = details.description;
-  document.querySelectorAll('[data-report]').forEach((option) => {
-    const active = option === button;
-    option.classList.toggle('active', active);
-    option.setAttribute('aria-selected', String(active));
-  });
-}));
-
-initializeReportDates();
-
-$('#executiveReportForm').addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const from = $('#executiveReportFrom').value;
-  const to = $('#executiveReportTo').value;
-  const status = $('#executiveReportStatus');
-  const button = event.currentTarget.querySelector('button[type="submit"]');
-  if (!from || !to || from > to) { status.textContent = 'Selecciona un rango de fechas válido.'; status.className = 'report-download-status error'; return; }
-  button.disabled = true; status.textContent = 'Preparando el PDF…'; status.className = 'report-download-status';
-  try {
-    const response = await fetch('/api/reports/executive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from, to }) });
-    if (!response.ok) { const data = await response.json(); throw new Error(data.error || 'No se pudo generar el informe.'); }
-    const file = await response.blob();
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(file); link.download = `informe-ejecutivo-${from}_a_${to}.pdf`; link.click();
-    URL.revokeObjectURL(link.href);
-    status.textContent = 'Descarga iniciada.'; status.className = 'report-download-status success';
-  } catch (error) { status.textContent = error.message; status.className = 'report-download-status error'; }
-  finally { button.disabled = false; }
-});
-
-$('#dailyReportForm').addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const from = $('#dailyReportFrom').value;
-  const to = $('#dailyReportTo').value;
-  const author = $('#dailyReportUser').value;
-  const status = $('#dailyReportStatus');
-  const button = event.currentTarget.querySelector('button[type="submit"]');
-  if (!from || !to || from > to) { status.textContent = 'Selecciona un rango de fechas válido.'; status.className = 'report-download-status error'; return; }
-  if (!author) { status.textContent = 'Selecciona un usuario.'; status.className = 'report-download-status error'; return; }
-  button.disabled = true; status.textContent = 'Generando el informe…'; status.className = 'report-download-status';
-  try {
-    const response = await fetch('/api/reports/daily', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from, to, author }) });
-    if (!response.ok) { const data = await response.json(); throw new Error(data.error || 'No se pudo generar el informe.'); }
-    const file = await response.blob();
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(file); link.download = `informe-diario-${from}_a_${to}.pdf`; link.click();
-    URL.revokeObjectURL(link.href);
-    status.textContent = 'Descarga iniciada.'; status.className = 'report-download-status success';
-  } catch (error) { status.textContent = error.message; status.className = 'report-download-status error'; }
-  finally { button.disabled = false; }
-});
-
-$('#saveReportInstructions').addEventListener('click', async (event) => {
-  const button = event.currentTarget;
-  const status = $('#reportInstructionsStatus');
-  button.disabled = true; status.textContent = 'Guardando…'; status.className = 'report-instructions-status';
-  try {
-    const result = await api('/api/report-instructions', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ instructions: $('#reportInstructions').value }) });
-    config.reportInstructions = result.reportInstructions;
-    $('#reportInstructions').value = result.reportInstructions;
-    status.textContent = 'Instrucciones guardadas.'; status.className = 'report-instructions-status success';
-  } catch (error) { status.textContent = error.message; status.className = 'report-instructions-status error'; }
-  finally { button.disabled = false; }
-});
+initializeReports({ $, api, getConfig: () => config, setConfig: (nextConfig) => { config = nextConfig; } });
 
 $('#newChatButton').addEventListener('click', () => { conversation = []; debugEvents = []; currentAgentActivity = null; $('#agentActivity').hidden = true; renderMessages(); renderDebug(); $('#chatQuestion').focus(); });
 
@@ -351,24 +220,24 @@ $('#chatForm').addEventListener('submit', async (event) => {
   renderDebug();
   showAgentActivity({ stage: 'started', message: 'Preparando la consulta…' });
   try {
-    await streamChat({ question, history, mode: $('#chatMode').value, debug: $('#debugMode').checked }, (text) => {
+    await streamChat({ question, history, mode: $('#chatMode').value, debug: $('#debugMode').checked }, { onDelta: (text) => {
       currentThinking = '';
       conversation[conversation.length - 1].content += text;
       renderMessages();
-    }, (entry) => {
+    }, onDebug: (entry) => {
       debugEvents.push(entry);
       renderDebug();
-    }, (activity) => {
+    }, onActivity: (activity) => {
       showAgentActivity(activity);
-    }, (thinking) => {
+    }, onThinking: (thinking) => {
       currentThinking += thinking.text || '';
       renderMessages();
-    }, (attachment) => {
+    }, onAttachment: (attachment) => {
       if (!attachment?.chatUrl) return;
       const attachments = conversation[conversation.length - 1].attachments;
       if (!attachments.some((item) => item.chatUrl === attachment.chatUrl)) attachments.push(attachment);
       renderMessages();
-    });
+    } });
   } catch (error) {
     conversation[conversation.length - 1].content = `No he podido responder: ${error.message}`;
     if ($('#debugMode').checked) {

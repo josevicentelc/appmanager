@@ -1,125 +1,189 @@
 # AppManager
 
-Aplicación local en Node.js para construir una base de conocimiento a partir del historial de commits de repositorios GitHub. Descarga commits y diffs, los analiza con un modelo local de LM Studio y guarda el resultado como archivos JSON persistentes.
+AppManager es una aplicación local en Node.js que construye una base de conocimiento consultable a partir de GitHub y Asana. Sincroniza commits, diffs, tareas, comentarios, cambios de estado, adjuntos y pull requests; guarda los datos como JSON y utiliza un modelo local de LM Studio para generar análisis, responder preguntas y redactar informes PDF.
 
-No usa base de datos ni envía información a servicios de IA externos.
+No necesita base de datos y no envía datos a servicios externos de IA. GitHub y Asana solo se consultan durante la sincronización mediante sus APIs oficiales.
 
-## Estado actual del MVP
+## Funcionalidades
 
-- Descubrimiento de todos los repositorios accesibles para el token de GitHub.
-- Selección de repositorios desde la interfaz web, persistida localmente.
-- Sincronización manual y periódica (cada 5 minutos por defecto).
-- Descarga de metadatos y diff de cada commit.
-- Análisis estructurado mediante la API compatible con OpenAI de LM Studio.
-- Progreso por repositorio: porcentaje, estados completado/pendiente/en análisis y actividad actual.
-- Conservación de commits, diffs y análisis en archivos locales.
-- Detección de tags Git y versiones SemVer, como `v-1.1.0`.
-- Reexploración automática del histórico cuando se modifica la fecha inicial de importación.
-- Chat local sobre el conocimiento sincronizado, con respuestas en streaming.
+- Descubrimiento y selección de repositorios accesibles para el token de GitHub.
+- Sincronización manual y periódica de commits, metadatos, tags y diffs.
+- Análisis estructurado de commits y tareas mediante LM Studio.
+- Persistencia local de datos crudos, índices, análisis y estados de sincronización.
+- Integración opcional con proyectos de Asana, incluidos comentarios, eventos y adjuntos.
+- Caché local de pull requests mencionados en tareas de Asana, almacenada en `data/pr`.
+- Chat con herramientas deterministas para buscar commits, autores, tareas, diffs y código.
+- Respuestas en streaming, mensajes de actividad explícitos y modo de depuración.
+- Informe ejecutivo por rango de fechas.
+- Informe diario por usuario y rango de fechas.
+- Exportación de informes en PDF.
+- Acceso protegido mediante usuario, contraseña y cookie de sesión.
 
-## Chat de conocimiento
-
-La pantalla principal es un chat con LM Studio. Usa los análisis de los últimos 100 commits sincronizados de los repositorios seleccionados como contexto local y conserva el historial de la conversación en el navegador.
-
-El selector **Developer** prioriza archivos, decisiones y riesgos técnicos; **Ejecutivo** prioriza impacto, objetivos y evolución. Las respuestas se muestran progresivamente conforme LM Studio las genera y admiten formato Markdown básico, incluidas listas y bloques de código.
-
-La interfaz incluye preguntas de ejemplo, indicador de generación, editor ajustable y atajos: **Enter** envía el mensaje y **Shift + Enter** inserta una nueva línea. La selección de repositorios, el modelo y la sincronización están en la pestaña **Configuración**.
+La organización interna y las reglas para extender el proyecto están en [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Requisitos
 
 - Node.js 20 o superior.
-- Una cuenta GitHub con un fine-grained personal access token.
-- LM Studio en ejecución con un modelo de chat cargado y servidor API activado.
+- Un fine-grained personal access token de GitHub con acceso de lectura a los repositorios necesarios.
+- LM Studio ejecutándose con un modelo cargado y su servidor compatible con OpenAI activado.
+- Opcionalmente, un token y workspace de Asana.
 
 ## Inicio rápido
 
-1. Crea `.env` a partir de `.env.example`.
-2. Completa como mínimo `GITHUB_TOKEN` y `LMSTUDIO_BASE_URL`.
-3. Ejecuta la aplicación:
+1. Crea un archivo `.env` en la raíz del proyecto.
+2. Configura GitHub, LM Studio y las credenciales de acceso.
+3. Arranca la aplicación (actualmente no requiere paquetes npm externos):
 
    ```powershell
    npm start
    ```
 
 4. Abre `http://localhost:3000`.
-5. En Configuración, selecciona el modelo de LM Studio, la fecha inicial y los repositorios que se deben sincronizar.
-6. Guarda y pulsa **Sincronizar ahora**.
+5. Inicia sesión.
+6. En **Configuración**, selecciona el modelo, los repositorios y, opcionalmente, los proyectos de Asana.
+7. Guarda la configuración y ejecuta las sincronizaciones iniciales.
 
-## Configuración
-
-La configuración sensible y de infraestructura se lee desde `.env`. Este archivo está excluido de Git.
+## Variables de entorno
 
 ```dotenv
+# Obligatorias
 GITHUB_TOKEN=github_pat_...
+LMSTUDIO_BASE_URL=http://127.0.0.1:1234/v1
+AUTH_USERNAME=admin
+AUTH_PASSWORD=usa-una-contraseña-larga-y-unica
 
-# URL compatible con OpenAI de LM Studio.
-LMSTUDIO_BASE_URL=http://192.168.10.206:1234/v1
-
-# Vacío para elegir el modelo en la interfaz.
-LMSTUDIO_MODEL=
-
+# Aplicación
+APP_PORT=3000
 DATA_DIRECTORY=./data
 SYNC_INTERVAL_MINUTES=5
-APP_PORT=3000
 DEFAULT_LANGUAGE=es
+LMSTUDIO_MODEL=
 
-# Opcional. Ruta absoluta a una CA en PEM si la red inspecciona HTTPS.
-# GITHUB_CA_CERT_FILE=C:/ruta/a/ca-corporativa.pem
+# Sesión
+AUTH_SESSION_HOURS=12
+# Usa true cuando la aplicación se publique detrás de HTTPS.
+AUTH_COOKIE_SECURE=false
+
+# Certificado corporativo opcional para GitHub.
+GITHUB_CA_CERT_FILE=
+
+# Integración opcional con Asana.
+ASANA_TOKEN=
+ASANA_WORKSPACE_ID=
+ASANA_CA_CERT_FILE=
+ASANA_TIMEOUT_MS=30000
+ASANA_MAX_RETRIES=3
+ASANA_MAX_ATTACHMENT_BYTES=26214400
 ```
 
-### Token de GitHub
+La configuración sensible permanece en `.env`. Las preferencias elegidas desde la interfaz se guardan en `data/config.json`.
 
-Para incluir repositorios privados propios:
+### Permisos de GitHub
 
-- **Resource owner**: la cuenta propietaria, por ejemplo `josevicentelc`.
-- **Repository access**: `All repositories`.
-- **Repository permissions → Contents**: `Read-only`.
+Para repositorios privados, el token fine-grained debe pertenecer al propietario u organización correctos y disponer al menos de:
 
-Los tokens fine-grained están asociados a un único propietario u organización. Para repositorios privados de otra organización puede ser necesario un token específico y aprobación de la organización.
+- acceso a los repositorios que se quieran sincronizar;
+- permiso **Contents: Read-only**;
+- acceso de lectura a pull requests cuando se use la asociación con tareas de Asana.
+
+Si la organización exige aprobación, el token debe estar autorizado por ella.
 
 ### Certificados HTTPS
 
-Si Node informa `unable to verify the first certificate`, no se debe desactivar la validación TLS. Exporta la CA de la red/proxy en formato PEM y declara su ruta mediante `GITHUB_CA_CERT_FILE`.
+Si Node muestra `unable to verify the first certificate`, configura la CA de la red en `GITHUB_CA_CERT_FILE` y, si corresponde, en `ASANA_CA_CERT_FILE`. No desactives globalmente la validación TLS.
 
-## Uso de la interfaz
+## Interfaz
 
 ### Chat
 
-- Es la pantalla de inicio y consulta exclusivamente el contexto local de commits ya analizados.
-- **Nueva conversación** elimina el historial de la sesión en el navegador; no modifica ningún dato sincronizado.
-- Si todavía no hay commits analizados, el modelo lo indicará. Selecciona repositorios y ejecuta una sincronización desde **Configuración** para aportar contexto.
+El chat consulta exclusivamente el conocimiento sincronizado localmente. El modo **Developer** prioriza archivos, implementación, decisiones técnicas y riesgos; el modo **Ejecutivo** prioriza objetivos, impacto y evolución.
+
+La recuperación inicial usa búsqueda léxica acotada. El director puede utilizar herramientas deterministas para:
+
+- buscar y leer análisis de commits;
+- obtener autores desde metadatos originales de GitHub;
+- localizar tareas y detalles de Asana;
+- buscar hunks dentro de diffs;
+- leer fragmentos paginados de diffs o archivos;
+- mostrar adjuntos de Asana almacenados localmente;
+- delegar clasificaciones semánticas acotadas.
+
+Las referencias recuperadas se validan contra los repositorios y proyectos seleccionados. Los datos de GitHub y Asana se consideran datos no confiables, nunca instrucciones para el modelo.
+
+Las consultas temporales se normalizan de forma determinista. Cuando se pide un subconjunto temático de todos los commits de un período, el sistema obtiene primero el conjunto completo y después delega su clasificación. La cobertura se controla mediante `requested`, `processed`, `missing` y `complete`.
+
+El **Modo depuración** muestra recuperación inicial, rondas de planificación, herramientas utilizadas, argumentos acotados, resultados resumidos, agentes delegados y duración de la generación. No muestra tokens, prompts completos ni cuerpos grandes de código.
+
+### Informes
+
+La pestaña **Informes** dispone de dos modalidades.
+
+#### Informe ejecutivo
+
+Recopila las tareas de Asana con actividad y los commits incluidos en el rango de fechas. La asociación se realiza de forma determinista mediante la caché local de pull requests:
+
+```text
+Tarea de Asana → enlace al pull request → commits y merge commit del PR
+```
+
+El informe ordena la actividad cronológicamente, incluye autores cuando están disponibles y presenta el avance de las tareas de forma legible. Los commits sin una relación local verificable se conservan como entradas independientes.
+
+#### Informe diario
+
+El selector de usuario se construye a partir de `created_by.name` en los ficheros `stories-raw.json`. Para el usuario y período seleccionados:
+
+1. se recuperan todas sus acciones en las historias de Asana;
+2. se agrupan por tarea;
+3. se combinan sus eventos con el análisis local de la tarea;
+4. LM Studio genera un resumen de alto nivel por tarea;
+5. los resúmenes se recopilan en un único PDF.
+
+Los movimientos de sección, cambios de estado y comentarios se usan como evidencia, pero el resultado intenta describir la actividad humana —implementación, revisión de código, investigación, validación o coordinación— sin enumerar cambios internos de Asana.
+
+La caja **Instrucciones para el LLM** es persistente y se incorpora a cada análisis individual del informe diario.
 
 ### Configuración
 
-- **Importar desde**: fecha inicial del histórico. Al cambiarla, el siguiente ciclo vuelve a explorar el rango indicado; es útil para ampliar el histórico o recuperar digestiones eliminadas.
-- **Modelo LM Studio**: se obtiene de `GET /v1/models`.
-- **Frecuencia**: intervalo de comprobación de nuevos commits.
-- **Idioma**: español o inglés para el análisis generado.
-- **Repositorios a sincronizar**: el inventario se consulta a GitHub con el token actual. La selección se guarda localmente, no en `.env`.
+Desde esta pestaña se administran:
 
-### Estado y progreso
+- fecha inicial de importación de GitHub;
+- fecha inicial de importación de Asana;
+- modelo de LM Studio;
+- idioma de los análisis;
+- intervalo de sincronización;
+- repositorios seleccionados y contexto descriptivo por repositorio;
+- proyectos de Asana seleccionados.
 
-La pantalla se actualiza cada 5 segundos. Para cada repositorio muestra:
+Las notas de repositorio están limitadas a 6.000 caracteres. Sirven como contexto descriptivo, pero no sustituyen la evidencia recuperada.
 
-- commits analizados, pendientes y actualmente en análisis;
-- porcentaje de progreso;
-- SHA y mensaje del commit actual;
-- actividad concreta: consulta de GitHub, listado de tags, descarga de diff, análisis en LM Studio o guardado local.
+## Sincronización
 
-## Flujo de sincronización
+### GitHub
 
-1. Se consulta el repositorio, su historial de commits y sus tags Git.
-2. Para cada commit nuevo o pendiente se descargan metadatos y diff.
-3. Los datos crudos se guardan antes de llamar al LLM.
-4. LM Studio produce un JSON validado por esquema.
-5. Se guarda el análisis y el estado queda como `completed`.
-6. Ante un fallo, el commit queda como `pending` con el error y se reintenta en una sincronización posterior.
+1. Se consulta el historial del repositorio y sus tags.
+2. Para cada commit pendiente se descargan metadatos y diff.
+3. Los datos crudos se guardan antes de invocar al modelo.
+4. LM Studio devuelve un análisis validado mediante un esquema JSON.
+5. Se guarda el análisis y el commit queda marcado como completado.
+6. Los fallos permanecen pendientes para poder reintentarlos.
 
-Los commits ya completados no se vuelven a analizar salvo que se elimine su estado local o se amplíe el rango histórico.
+Los diffs se indexan por archivos y hunks para permitir búsquedas y lecturas acotadas. Los commits completados no se vuelven a analizar salvo que cambie el rango de importación o se elimine su estado local.
+
+### Asana y pull requests
+
+1. Se listan las tareas de cada proyecto seleccionado.
+2. Se descartan las creadas antes de `asanaImportSince`.
+3. Se descargan tarea, historias y adjuntos.
+4. Los adjuntos de texto se incorporan de forma acotada al análisis; los binarios solo se almacenan e inventarían.
+5. Se detectan enlaces de pull requests en la descripción y las historias.
+6. Se sincronizan los metadatos y commits de cada PR en `data/pr`.
+7. La tarea se vuelve a analizar únicamente cuando cambia `modified_at`.
+
+Un fallo al actualizar un PR no invalida una tarea de Asana que ya esté correctamente sincronizada.
 
 ## Datos almacenados
 
-Toda la información está en `data/`, que permanece fuera del repositorio Git.
+Todo el conocimiento persistente está bajo `data/`, que debe permanecer fuera del control de versiones.
 
 ```text
 data/
@@ -134,179 +198,79 @@ data/
           diff-index.json
           analysis.json
           status.json
+  asana/
+    projects/
+      <project-gid>/
+        state.json
+        tasks/
+          <task-gid>/
+            task-raw.json
+            stories-raw.json
+            attachments.json
+            attachments/
+            analysis.json
+            status.json
+  pr/
+    propietario__repositorio/
+      <numero-pr>.json
 ```
 
-- `config.json`: preferencias guardadas desde la interfaz.
-- `state.json`: estado de sincronización del repositorio, última comprobación y métricas.
-- `github-raw.json`: respuesta original de la API GitHub.
-- `diff.patch`: diff completo del commit.
-- `diff-index.json`: archivos, hunks, rangos y offsets para recuperar fragmentos del diff sin inyectarlo completo.
-- `analysis.json`: resumen estructurado generado por el modelo.
+- `github-raw.json`: respuesta original de GitHub.
+- `diff.patch`: diff completo.
+- `diff-index.json`: índice de archivos, hunks, líneas y offsets.
+- `analysis.json`: conocimiento estructurado generado por LM Studio.
 - `status.json`: estado de digestión, intentos y último error.
+- `stories-raw.json`: comentarios y eventos originales de Asana.
+- `data/pr`: caché reutilizable de pull requests, commits y relaciones con tareas.
 
-## Formato del análisis
-
-Cada `analysis.json` incluye datos de origen, resumen de IA y tags Git reales. Los tags de Git se mantienen separados de las categorías semánticas que genera el modelo.
-
-```json
-{
-  "repository": "josevicentelc/cppNeuralNetwork",
-  "sha": "0237297db66b85533a32753b0e74b6b9bd8d4ee5",
-  "gitTags": ["v-1.0.0"],
-  "releaseVersions": ["1.0.0"],
-  "briefDescription": "...",
-  "tags": ["feature", "performance"],
-  "changeSummary": "...",
-  "inferredMotivation": {
-    "text": "...",
-    "confidence": "high"
-  },
-  "technicalDetails": {
-    "filesChanged": [],
-    "keyChanges": [],
-    "potentialImpact": [],
-    "risksOrFollowUps": []
-  }
-}
-```
-
-Para añadir tags de Git a análisis que ya existían, se puede ejecutar:
+## Scripts
 
 ```powershell
-npm run backfill:tags -- propietario/repositorio
+npm start                            # inicia la aplicación
+npm run dev                          # inicia Node en modo watch
+npm run check                        # valida todos los archivos JavaScript
+npm test                             # ejecuta la suite automatizada
+npm run backfill:tags -- owner/repo  # incorpora tags Git a análisis existentes
 ```
 
-## Scripts disponibles
+Antes de entregar cambios se recomienda ejecutar:
 
 ```powershell
-npm start                         # inicia la aplicación
-npm run dev                       # inicia Node en modo watch
-npm run check                     # valida sintaxis del servidor
-npm test                          # ejecuta las pruebas automatizadas
-npm run backfill:tags -- owner/repo  # añade tags Git a análisis existentes
+npm run check
+npm test
 ```
-
-## Recuperacion de conocimiento en el chat
-
-El chat no inyecta el histórico completo en cada consulta. Para preguntas normales recupera hasta seis análisis relevantes por coincidencia léxica sobre mensaje, resumen, archivos, cambios, riesgos y etiquetas. El modelo recibe ese contexto compacto y herramientas para buscar y leer análisis, buscar dentro de los diffs, recuperar hunks completos y leer un rango acotado del archivo en el commit o en su primer padre.
-
-Las consultas de informe con un año o periodo, por ejemplo *"Dame los cambios hechos en el servidor en 2026"*, siguen un flujo exhaustivo: recuperan todos los commits del rango antes de aplicar una clasificación semántica.
-
-Los indices de diff se generan al sincronizar. Para datos existentes se crean automaticamente la primera vez que una busqueda necesita el `diff.patch`, por lo que no es necesario repetir la sincronizacion.
-
-La busqueda de diffs devuelve metadatos de coincidencia y carga automaticamente el hunk principal completo, hasta el presupuesto de seguridad. Los previews parciales no se entregan como codigo utilizable, evitando que el modelo los confunda con una funcion completa.
-
-Las llamadas a herramientas se validan en el servidor, solo acceden a repositorios seleccionados y estan limitadas a cuatro rondas y cuatro llamadas por ronda. Las rutas, SHA, fechas, resultados, hunks y rangos de lineas estan acotados. Los resultados son datos locales no confiables, nunca instrucciones. Las respuestas deben citar los analisis como `[owner/repo@sha-corto]` y el codigo como `[owner/repo@sha-corto:ruta:hunk-o-lineas]`.
-
-Las lecturas largas de hunks y archivos son paginadas. Cada resultado indica `truncated` y `nextStartLine`; cuando se solicita contenido completo, el agente debe continuar mientras exista una pagina siguiente o hasta localizar el final de la funcion.
-
-### Modo de depuracion
-
-El chat incluye un interruptor **Modo depuración**. Cuando está activo, el servidor envía eventos de traza junto a la respuesta SSE y la interfaz muestra:
-
-- fuentes elegidas para el contexto inicial y su cobertura;
-- cada ronda de planificación y su duración;
-- herramientas solicitadas por el modelo y sus argumentos;
-- número de resultados, fuentes, fechas, truncamientos y continuaciones;
-- actividad y resultados de los agentes delegados;
-- momento de inicio y fin de la generación final.
-
-La traza no incluye el token de GitHub, el prompt del sistema, el historial completo ni cuerpos grandes de código. Se conserva en pantalla hasta iniciar otra consulta o una nueva conversación.
-
-### Director y agentes especializados
-
-El chat utiliza un director que coordina herramientas deterministas y agentes con contextos acotados. Las consultas que piden informes o cambios de un período se reconocen como trabajos exhaustivos:
-
-1. El servidor obtiene todos los commits del rango sin aplicar filtros semánticos prematuros.
-2. El director delega el conjunto completo al agente `commit_classifier`.
-3. El agente procesa lotes de hasta ocho commits y reintenta una vez cualquier referencia omitida.
-4. El resultado incluye un contrato de cobertura con `requested`, `processed`, `missing` y `complete`.
-5. Si la cobertura es completa, el director sintetiza directamente. Si no lo es, debe informar de las referencias pendientes.
-
-La clasificación automática admite hasta 200 commits por informe y divide la delegación en grupos de 24. Para otras preguntas, el director puede invocar manualmente `delegate_commit_classification` sobre un conjunto recuperado con las herramientas.
-
-Las herramientas disponibles para el director son:
-
-- `search_commit_knowledge`: búsqueda paginada por texto, repositorio, etiquetas y fechas; devuelve `totalMatches`, `hasMore` y `nextOffset`.
-- `get_commit_knowledge`: lectura del análisis estructurado de un commit.
-- `delegate_commit_classification`: clasificación semántica por un agente especializado con contrato de cobertura.
-- `search_diff_hunks`, `read_diff_hunk` y `read_file_at_commit`: investigación de bajo nivel en diffs y código.
-
-Durante la ejecución, una barra de actividad informa si el director está planificando, ejecutando herramientas, delegando, procesando un lote o redactando la respuesta final. Esta información aparece aunque el modo de depuración esté desactivado.
-
-Para una recuperacion semantica basada en embeddings se requeriria añadir un modelo de embeddings y un indice vectorial local; esta version usa busqueda lexical determinista para mantener el MVP sin dependencias ni base de datos.
 
 ## API local
 
+Salvo los recursos estáticos y las rutas de autenticación, la API requiere una sesión válida.
+
 | Método | Ruta | Descripción |
 | --- | --- | --- |
-| `GET` | `/api/health` | Comprobación básica del servidor. |
+| `POST` | `/api/auth/login` | Crea una sesión autenticada. |
+| `POST` | `/api/auth/logout` | Invalida la sesión actual. |
+| `GET` | `/api/auth/session` | Comprueba si la sesión es válida. |
+| `GET` | `/api/health` | Comprueba que el servidor responde. |
 | `GET` / `PUT` | `/api/config` | Lee o guarda la configuración local. |
+| `PUT` | `/api/report-instructions` | Guarda las instrucciones persistentes de informes. |
 | `GET` | `/api/models` | Lista los modelos disponibles en LM Studio. |
 | `GET` | `/api/github-repositories` | Lista los repositorios visibles para el token. |
-| `GET` | `/api/status` | Estado global y progreso por repositorio. |
-| `POST` | `/api/sync` | Inicia una sincronización manual. |
-| `POST` | `/api/chat` | Genera una respuesta de chat en streaming (SSE) usando los análisis locales como contexto. |
+| `GET` | `/api/asana-projects` | Lista los proyectos disponibles de Asana. |
+| `GET` | `/api/asana-report-users` | Lista autores encontrados en historias de Asana. |
+| `GET` | `/api/status` | Devuelve el estado global de sincronización. |
+| `POST` | `/api/sync` | Inicia la sincronización de GitHub. |
+| `POST` | `/api/asana/sync` | Inicia la sincronización de Asana y PR. |
+| `POST` | `/api/chat` | Devuelve una respuesta de chat mediante SSE. |
+| `POST` | `/api/reports/executive` | Genera el informe ejecutivo en PDF. |
+| `POST` | `/api/reports/daily` | Genera el informe diario en PDF. |
+| `GET` | `/api/asana/attachments/...` | Sirve un adjunto local autenticado. |
 
 ## Seguridad
 
-- Nunca compartas ni subas `.env`.
-- Usa un token con permisos mínimos y fecha de expiración.
-- `data/` puede contener código, diffs y metadatos sensibles; está ignorado por Git a propósito.
-- La aplicación no expone el token al frontend.
-
-## Acceso con contraseña
-
-La interfaz y todas las APIs de conocimiento requieren una sesión autenticada. Define estos valores en `.env` antes de iniciar el servidor:
-
-```dotenv
-AUTH_USERNAME=admin
-AUTH_PASSWORD=usa-una-contraseña-larga-unica
-# Obligatorio al publicar detrás de HTTPS.
-AUTH_COOKIE_SECURE=true
-AUTH_SESSION_HOURS=12
-```
-
-Las sesiones se guardan únicamente en memoria, caducan tras el periodo configurado y se invalidan al reiniciar el proceso. La cookie es `HttpOnly`, `SameSite=Strict` y, con `AUTH_COOKIE_SECURE=true`, `Secure`. El acceso limita los intentos fallidos por IP.
-
-Para exponer el servicio públicamente, publícalo únicamente detrás de un proxy inverso con HTTPS válido (por ejemplo, Caddy, Nginx o un túnel con TLS). No uses `AUTH_COOKIE_SECURE=false` en Internet y no expongas directamente el puerto de Node.
-
-## Contexto por repositorio
-
-En **Configuración**, cada repositorio incluye un campo persistente **Contexto para el LLM**. Úsalo para describir el propósito del repositorio, arquitectura, límites de componentes, dominio funcional, responsables, convenciones y terminología interna. Se guarda en `data/config.json` al pulsar **Guardar configuración** y se aporta al director en cada conversación.
-
-Estas notas están limitadas a 6.000 caracteres por repositorio y se tratan como contexto descriptivo, no como evidencia: el modelo debe verificar cambios, código y hechos mediante el conocimiento sincronizado y sus herramientas.
-
-## Integración con Asana
-
-Asana es una fuente opcional de conocimiento local. Añade a `.env`:
-
-```dotenv
-ASANA_TOKEN=
-ASANA_WORKSPACE_ID=
-ASANA_TIMEOUT_MS=30000
-ASANA_MAX_RETRIES=3
-ASANA_MAX_ATTACHMENT_BYTES=26214400
-```
-
-Después de reiniciar, la configuración muestra los proyectos disponibles. Selecciona los que deban formar parte de la base de conocimiento, define **Incluir tareas creadas desde** y usa **Sincronizar Asana**. El ciclo periódico también sincroniza los proyectos seleccionados. Solo se digieren tareas cuyo `created_at` sea igual o posterior a esa fecha; el filtro se aplica localmente antes de descargar detalles, comentarios o adjuntos.
-
-Por tarea se conservan los datos crudos, descripción, responsables, fechas, campos personalizados, etiquetas, comentarios y eventos de cambio de estado. Se guarda además el inventario de adjuntos y se descargan localmente aquellos que Asana permite descargar, con un límite por fichero configurable. Los adjuntos de texto (`.txt`, `.md`, `.json`, `.csv`, `.log`, `.yaml`) se incorporan de forma acotada a la digestión; los binarios se conservan e inventarían, pero no se envían al LLM. Cuando se pregunta por un adjunto descargado, el chat puede mostrar imágenes PNG/JPEG/GIF/WebP/AVIF en línea y ofrece enlaces autenticados de descarga para documentos.
-
-La sincronización pagina la API y reintenta errores transitorios y límites de uso. Una tarea solo se vuelve a analizar cuando cambia `modified_at`, por lo que comentarios y cambios posteriores realimentan el conocimiento sin repetir trabajo innecesario.
-
-```text
-data/asana/projects/<project-gid>/
-  state.json
-  tasks/<task-gid>/
-    task-raw.json        # tarea original de Asana
-    stories-raw.json     # comentarios y eventos de estado
-    attachments.json     # inventario, tamaño, tipo y ruta local
-    attachments/         # ficheros descargados
-    analysis.json        # conocimiento estructurado para buscar
-    status.json
-```
-
-El director dispone de `search_asana_tasks` para localizar tareas relevantes y `get_asana_task_knowledge` para recuperar su descripción, digestión, comentarios, cambios e inventario de adjuntos. Las citas de esta fuente se expresan como `[asana:project-gid@task-gid]`.
-
-La API local incluye `GET /api/asana-projects` y `POST /api/asana/sync`. El token nunca se expone al navegador. Puesto que los adjuntos pueden ser sensibles, `data/asana/` debe mantenerse fuera de Git.
+- No compartas ni subas `.env`.
+- Usa tokens con permisos mínimos y fecha de expiración.
+- Considera `data/` información sensible: puede contener código, diffs, tareas y adjuntos.
+- Los tokens nunca se envían al navegador.
+- Las sesiones se guardan en memoria y se invalidan al reiniciar el proceso.
+- La cookie es `HttpOnly`, `SameSite=Strict` y puede marcarse como `Secure`.
+- Los intentos de acceso fallidos están limitados por IP.
+- Si publicas la aplicación, utiliza un proxy inverso con HTTPS y configura `AUTH_COOKIE_SECURE=true`.

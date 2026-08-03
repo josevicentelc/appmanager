@@ -100,6 +100,6 @@
       <section class="card"><h2>Preferencias</h2><form id="configForm"><label>Importar desde<input id="importSince" type="date" required></label><label>Modelo LM Studio<select id="model"><option value="">Selecciona un modelo</option></select></label><label>Frecuencia (minutos)<input id="interval" type="number" min="1" max="1440" required></label><label>Idioma<select id="language"><option value="es">Español</option><option value="en">English</option></select></label><fieldset><legend>Repositorios a sincronizar</legend><p class="muted">Disponibles para el token actual de GitHub.</p><div id="repositoryChoices" class="repository-choices"></div></fieldset><fieldset><legend>Proyectos de Asana</legend><label>Incluir tareas creadas desde<input id="asanaImportSince" type="date" required></label><p id="asanaConfigHint" class="muted">Configura ASANA_TOKEN y ASANA_WORKSPACE_ID para activar Asana.</p><div id="asanaProjectChoices" class="repository-choices"></div></fieldset><button type="submit">Guardar configuración</button><span id="formStatus"></span></form></section>
     </section>
   </main>
-  <script src="/app.js"></script>
+  <script type="module" src="/app.js"></script>
 </body>
 </html>
