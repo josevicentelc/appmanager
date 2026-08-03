@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ExecutiveReportService } from '../src/reports.js';
+import { DailyReportService, ExecutiveReportService } from '../src/reports.js';
 
 test('builds executive-report evidence from dated Asana activity and cached PR commits', async () => {
   const sha = 'a'.repeat(40);
@@ -20,4 +20,17 @@ test('builds executive-report evidence from dated Asana activity and cached PR c
   assert.equal(result.entries[0].type, 'asana_commit');
   assert.equal(result.entries[0].commit.author.name, 'Ana');
   assert.equal(result.entries[0].task.activity[0].text, 'Despliegue revisado.');
+});
+
+test('generates one daily LLM report for every task with selected-user activity', async () => {
+  const requests = [];
+  const asanaStore = {
+    async listStoryActivityByAuthor() { return [{ projectGid: '10', taskGid: '100', task: { name: 'Despliegue' }, analysis: { briefDescription: 'Preparar despliegue' }, events: [{ date: '2026-08-03T08:00:00Z', text: 'Validé la publicación.' }] }]; }
+  };
+  const lmStudio = { async structuredChat(request) { requests.push(request); return { summary: 'Validó la publicación.', activityType: 'validation', outcome: 'La publicación quedó validada.', confidence: 'high' }; } };
+  const result = await new DailyReportService({ asanaStore, lmStudio }).generate({ model: 'test', language: 'es', projectGids: ['10'], author: 'Ana Pérez', from: '2026-08-03', to: '2026-08-03', instructions: 'Prioriza riesgos.' });
+  assert.equal(result.coverage.generated, 1);
+  assert.equal(requests.length, 1);
+  assert.match(requests[0].messages[1].content, /Prioriza riesgos/);
+  assert.match(requests[0].messages[1].content, /Ana Pérez/);
 });

@@ -165,7 +165,7 @@ function setChatBusy(busy) {
 
 async function load() {
   config = await api('/api/config');
-  const [models, githubRepositories, asanaProjects] = await Promise.all([api('/api/models'), api('/api/github-repositories'), api('/api/asana-projects')]);
+  const [models, githubRepositories, asanaProjects, asanaReportUsers] = await Promise.all([api('/api/models'), api('/api/github-repositories'), api('/api/asana-projects'), api('/api/asana-report-users')]);
   $('#importSince').value = config.importSince;
   $('#asanaImportSince').value = config.asanaImportSince;
   $('#interval').value = config.syncIntervalMinutes;
@@ -174,6 +174,9 @@ async function load() {
   $('#repositoryChoices').innerHTML = githubRepositories.repositories.map((repo) => `<article class="repository-context"><label class="repository-choice"><input type="checkbox" value="${escapeHtml(repo.fullName)}" ${config.repositories.includes(repo.fullName) ? 'checked' : ''}><span><strong>${escapeHtml(repo.fullName)}</strong><small>${repo.private ? 'Privado' : 'Público'} · ${escapeHtml(repo.description || 'Sin descripción')}</small></span></label><label class="repository-note-label">Contexto para el LLM<textarea data-repository-note="${escapeHtml(repo.fullName)}" maxlength="6000" placeholder="Arquitectura, propósito, dominio, convenciones o terminología…">${escapeHtml(config.repositoryNotes?.[repo.fullName] || '')}</textarea></label></article>`).join('') || '<p>No hay repositorios disponibles para este token.</p>';
   $('#asanaConfigHint').textContent = asanaProjects.configured ? 'Selecciona los proyectos cuyas tareas, comentarios, cambios de estado y adjuntos se conservarán localmente.' : 'Configura ASANA_TOKEN y ASANA_WORKSPACE_ID en .env y reinicia la aplicación para activar Asana.';
   $('#asanaProjectChoices').innerHTML = asanaProjects.projects.map((project) => `<label class="repository-choice"><input type="checkbox" value="${escapeHtml(project.gid)}" ${config.asanaProjects.includes(project.gid) ? 'checked' : ''}><span><strong>${escapeHtml(project.name)}</strong><small>${project.archived ? 'Archivado' : 'Activo'} · ${escapeHtml(project.gid)}</small></span></label>`).join('') || (asanaProjects.configured ? '<p>No hay proyectos disponibles para este token de Asana.</p>' : '');
+  $('#dailyReportUser').innerHTML = '<option value="">Selecciona un usuario</option>' + asanaReportUsers.users.map((user) => `<option value="${escapeHtml(user)}">${escapeHtml(user)}</option>`).join('');
+  $('#dailyReportUser').disabled = !asanaReportUsers.users.length;
+  $('#reportInstructions').value = config.reportInstructions || '';
   $('#chatContext').textContent = config.repositories.length ? `${config.repositories.length} repositorio(s) seleccionado(s) como fuente de conocimiento.` : 'Selecciona y sincroniza repositorios en Configuración para alimentar el chat.';
   await refreshStatus();
 }
@@ -267,6 +270,41 @@ $('#executiveReportForm').addEventListener('submit', async (event) => {
     URL.revokeObjectURL(link.href);
     status.textContent = 'Descarga iniciada.'; status.className = 'report-download-status success';
   } catch (error) { status.textContent = error.message; status.className = 'report-download-status error'; }
+  finally { button.disabled = false; }
+});
+
+$('#dailyReportForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const from = $('#dailyReportFrom').value;
+  const to = $('#dailyReportTo').value;
+  const author = $('#dailyReportUser').value;
+  const status = $('#dailyReportStatus');
+  const button = event.currentTarget.querySelector('button[type="submit"]');
+  if (!from || !to || from > to) { status.textContent = 'Selecciona un rango de fechas válido.'; status.className = 'report-download-status error'; return; }
+  if (!author) { status.textContent = 'Selecciona un usuario.'; status.className = 'report-download-status error'; return; }
+  button.disabled = true; status.textContent = 'Generando el informe…'; status.className = 'report-download-status';
+  try {
+    const response = await fetch('/api/reports/daily', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from, to, author }) });
+    if (!response.ok) { const data = await response.json(); throw new Error(data.error || 'No se pudo generar el informe.'); }
+    const file = await response.blob();
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(file); link.download = `informe-diario-${from}_a_${to}.pdf`; link.click();
+    URL.revokeObjectURL(link.href);
+    status.textContent = 'Descarga iniciada.'; status.className = 'report-download-status success';
+  } catch (error) { status.textContent = error.message; status.className = 'report-download-status error'; }
+  finally { button.disabled = false; }
+});
+
+$('#saveReportInstructions').addEventListener('click', async (event) => {
+  const button = event.currentTarget;
+  const status = $('#reportInstructionsStatus');
+  button.disabled = true; status.textContent = 'Guardando…'; status.className = 'report-instructions-status';
+  try {
+    const result = await api('/api/report-instructions', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ instructions: $('#reportInstructions').value }) });
+    config.reportInstructions = result.reportInstructions;
+    $('#reportInstructions').value = result.reportInstructions;
+    status.textContent = 'Instrucciones guardadas.'; status.className = 'report-instructions-status success';
+  } catch (error) { status.textContent = error.message; status.className = 'report-instructions-status error'; }
   finally { button.disabled = false; }
 });
 

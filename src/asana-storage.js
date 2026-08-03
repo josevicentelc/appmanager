@@ -70,6 +70,29 @@ export class AsanaStore {
     }
     return analyses.sort((a, b) => String(b.task?.modifiedAt ?? '').localeCompare(String(a.task?.modifiedAt ?? '')));
   }
+  async listStoryAuthorNames(projectGids) {
+    const names = new Set();
+    for (const projectGid of projectGids) for (const taskGid of await this.listTaskGids(projectGid)) {
+      for (const story of await this.getTaskStories(projectGid, taskGid)) {
+        const name = String(story?.created_by?.name ?? '').trim();
+        if (name) names.add(name);
+      }
+    }
+    return [...names].sort((left, right) => left.localeCompare(right, 'es'));
+  }
+  async listStoryActivityByAuthor(projectGids, { author, from, to } = {}) {
+    const selectedAuthor = String(author ?? '').trim();
+    if (!selectedAuthor) return [];
+    const activities = [];
+    for (const projectGid of projectGids) for (const taskGid of await this.listTaskGids(projectGid)) {
+      const [task, analysis, stories] = await Promise.all([this.getTaskRaw(projectGid, taskGid), this.getTaskAnalysis(projectGid, taskGid), this.getTaskStories(projectGid, taskGid)]);
+      const events = stories.filter((story) => String(story?.created_by?.name ?? '').trim() === selectedAuthor)
+        .filter((story) => String(story.created_at ?? '') >= `${from}T00:00:00.000Z` && String(story.created_at ?? '') <= `${to}T23:59:59.999Z`)
+        .map((story) => ({ gid: story.gid ?? null, type: story.type ?? null, resourceSubtype: story.resource_subtype ?? null, date: story.created_at, text: story.text ?? null, oldValue: story.old_value ?? null, newValue: story.new_value ?? null }));
+      if (events.length) activities.push({ projectGid, taskGid, task, analysis, events });
+    }
+    return activities.sort((left, right) => String(left.events[0]?.date ?? '').localeCompare(String(right.events[0]?.date ?? '')));
+  }
   async searchAnalyses(projectGids, { query = '', projectGid = '', createdSince = '', createdUntil = '', completed, limit = 12 } = {}) {
     const terms = [...new Set(words(query))];
     return (await this.listAnalyses(projectGids, { createdSince, createdUntil })).filter((analysis) => !projectGid || analysis.project?.gid === projectGid)

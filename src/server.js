@@ -14,7 +14,7 @@ import { AsanaClient } from './asana.js';
 import { AsanaStore } from './asana-storage.js';
 import { AsanaSyncService } from './asana-sync.js';
 import { PullRequestStore } from './pr-storage.js';
-import { ExecutiveReportService } from './reports.js';
+import { DailyReportService, ExecutiveReportService } from './reports.js';
 import { markdownPdf } from './pdf.js';
 import { temporalScope } from './date-range.js';
 import { LocalAuthenticator } from './auth.js';
@@ -32,6 +32,7 @@ const sync = new SyncService({ environment, store, github, lmStudio, getConfig: 
 const asanaStore = new AsanaStore(environment.dataDirectory);
 const pullRequestStore = new PullRequestStore(environment.dataDirectory);
 const executiveReports = new ExecutiveReportService({ store, asanaStore, pullRequestStore });
+const dailyReports = new DailyReportService({ asanaStore, lmStudio });
 const asana = new AsanaClient({ token: environment.asanaToken, workspaceId: environment.asanaWorkspaceId, caCertFile: environment.asanaCaCertFile, timeoutMs: environment.asanaTimeoutMs, maxRetries: environment.asanaMaxRetries, maxAttachmentBytes: environment.asanaMaxAttachmentBytes });
 const asanaSync = new AsanaSyncService({ environment, store: asanaStore, asana, github, pullRequestStore, lmStudio, getConfig: () => appConfig });
 const authenticator = new LocalAuthenticator({ username: environment.authUsername, password: environment.authPassword, secureCookie: environment.authCookieSecure, sessionHours: environment.authSessionHours });
@@ -353,7 +354,9 @@ function sendJson(response, status, value) { response.writeHead(status, { 'Conte
 async function body(request) { let text = ''; for await (const chunk of request) text += chunk; return text ? JSON.parse(text) : {}; }
 function publicConfig() { return { ...appConfig, lmStudioBaseUrl: environment.lmStudioBaseUrl, dataDirectory: environment.dataDirectory }; }
 const inlineImageTypes = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif']);
-const attachmentFilename = (value) => String(value ?? 'attachment').replace(/[\r\n"\\]/g, '_').slice(0, 160) || 'attachment';
+const attachmentFilename = (value) => String(value ?? 'attachment')
+  .normalize('NFKD').replace(/\p{M}/gu, '')
+  .replace(/[^\x20-\x7E]/g, '_').replace(/[\r\n"\\]/g, '_').slice(0, 160) || 'attachment';
 async function sendAsanaAttachment(response, projectGid, taskGid, attachment) {
   const data = await asanaStore.readAttachment(projectGid, taskGid, attachment.localPath);
   const contentType = String(attachment.contentType ?? 'application/octet-stream').split(';')[0].toLocaleLowerCase();
@@ -475,6 +478,24 @@ function executiveReportMarkdown(report) {
   return `${lines.join('\n')}\n`;
 }
 
+function dailyReportMarkdown(report) {
+  const lines = ['# Informe diario', '', `Período: ${report.period.from} a ${report.period.to}`, `Usuario: ${markdownText(report.author)}`, '', '## Cobertura', '', `Tareas con actividad: ${report.coverage.tasksWithActivity}`, `Informes generados: ${report.coverage.generated}`, `Informes no generados: ${report.coverage.failed}`, '', '## Actividad por tarea', ''];
+  if (!report.entries.length) lines.push('No se encontró actividad de este usuario en tareas de Asana durante el período.');
+  for (const entry of report.entries) {
+    const title = entry.task?.name || entry.analysis?.task?.name || entry.taskGid;
+    const asanaUrl = entry.task?.permalink_url || entry.analysis?.task?.permalinkUrl || '';
+    const description = entry.analysis?.briefDescription || entry.analysis?.objective || entry.task?.notes || 'No hay una descripción disponible.';
+    lines.push(`### ${markdownText(title)}`, '', `Enlace de Asana: ${asanaUrl || 'No disponible'}`, '', `Descripción: ${markdownText(description).slice(0, 900)}`, '');
+    if (entry.error) lines.push(`No se pudo generar el análisis de esta tarea: ${markdownText(entry.error)}`);
+    else {
+      const details = [entry.report.summary, entry.report.outcome].filter(Boolean).map(markdownText).join(' ');
+      lines.push(`Resumen del trabajo realizado: ${details || 'No se generó un resumen.'}`);
+    }
+    lines.push('');
+  }
+  return `${lines.join('\n')}\n`;
+}
+
 const server = http.createServer(async (request, response) => {
   try {
     const url = new URL(request.url, `http://${request.headers.host}`);
@@ -505,12 +526,19 @@ const server = http.createServer(async (request, response) => {
       const repositoryNotes = Object.fromEntries(repositories.map((repository) => [repository, String(rawNotes[repository] ?? '').trim().slice(0, 6_000)]).filter(([, note]) => note));
       const asanaProjects = Array.isArray(input.asanaProjects) ? [...new Set(input.asanaProjects.map((project) => String(project).trim()).filter((project) => /^\d{1,30}$/.test(project)))] : [];
       if (!/^\d{4}-\d{2}-\d{2}$/.test(input.asanaImportSince ?? '')) return sendJson(response, 400, { error: 'La fecha inicial de Asana debe tener formato YYYY-MM-DD.' });
-      appConfig = { importSince: input.importSince, model: String(input.model ?? ''), language: input.language, syncIntervalMinutes: interval, repositories, repositoryNotes, asanaProjects, asanaImportSince: input.asanaImportSince };
+      appConfig = { importSince: input.importSince, model: String(input.model ?? ''), language: input.language, syncIntervalMinutes: interval, repositories, repositoryNotes, asanaProjects, asanaImportSince: input.asanaImportSince, reportInstructions: String(input.reportInstructions ?? appConfig.reportInstructions ?? '').trim().slice(0, 6_000) };
       await saveAppConfig(environment, appConfig); return sendJson(response, 200, publicConfig());
+    }
+    if (request.method === 'PUT' && url.pathname === '/api/report-instructions') {
+      const input = await body(request);
+      appConfig = { ...appConfig, reportInstructions: String(input.instructions ?? '').trim().slice(0, 6_000) };
+      await saveAppConfig(environment, appConfig);
+      return sendJson(response, 200, { reportInstructions: appConfig.reportInstructions });
     }
     if (request.method === 'GET' && url.pathname === '/api/models') return sendJson(response, 200, { models: await lmStudio.models() });
     if (request.method === 'GET' && url.pathname === '/api/github-repositories') return sendJson(response, 200, { repositories: await github.listRepositories() });
     if (request.method === 'GET' && url.pathname === '/api/asana-projects') return sendJson(response, 200, asana.configured() ? { configured: true, projects: await asana.listProjects() } : { configured: false, projects: [] });
+    if (request.method === 'GET' && url.pathname === '/api/asana-report-users') return sendJson(response, 200, { users: await asanaStore.listStoryAuthorNames(appConfig.asanaProjects ?? []) });
     const attachmentByIdMatch = request.method === 'GET' && url.pathname.match(/^\/api\/asana\/attachments\/by-id\/(\d{1,30})$/);
     if (attachmentByIdMatch) {
       const found = await asanaStore.findAttachment(appConfig.asanaProjects ?? [], attachmentByIdMatch[1]);
@@ -541,6 +569,19 @@ const server = http.createServer(async (request, response) => {
       const filename = `informe-ejecutivo-${from}_a_${to}.pdf`;
       const markdown = executiveReportMarkdown(report);
       const pdf = markdownPdf(markdown);
+      response.writeHead(200, { 'Content-Type': 'application/pdf', 'Content-Length': pdf.length, 'Content-Disposition': `attachment; filename="${filename}"`, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+      return response.end(pdf);
+    }
+    if (request.method === 'POST' && url.pathname === '/api/reports/daily') {
+      const input = await body(request);
+      const from = String(input.from ?? ''); const to = String(input.to ?? ''); const author = String(input.author ?? '').trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) return sendJson(response, 400, { error: 'Selecciona un rango de fechas válido.' });
+      if (!author) return sendJson(response, 400, { error: 'Selecciona un usuario para el informe diario.' });
+      const knownAuthors = await asanaStore.listStoryAuthorNames(appConfig.asanaProjects ?? []);
+      if (!knownAuthors.includes(author)) return sendJson(response, 400, { error: 'El usuario seleccionado no pertenece a las tareas Asana configuradas.' });
+      const report = await dailyReports.generate({ model: appConfig.model, language: appConfig.language, projectGids: appConfig.asanaProjects ?? [], author, from, to, instructions: appConfig.reportInstructions ?? '' });
+      const pdf = markdownPdf(dailyReportMarkdown(report));
+      const filename = `informe-diario-${from}_a_${to}-${attachmentFilename(author)}.pdf`;
       response.writeHead(200, { 'Content-Type': 'application/pdf', 'Content-Length': pdf.length, 'Content-Disposition': `attachment; filename="${filename}"`, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
       return response.end(pdf);
     }

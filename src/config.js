@@ -57,7 +57,8 @@ export function defaultAppConfig(environment) {
     repositories: [],
     repositoryNotes: {},
     asanaProjects: [],
-    asanaImportSince: thirtyDaysAgo
+    asanaImportSince: thirtyDaysAgo,
+    reportInstructions: ''
   };
 }
 

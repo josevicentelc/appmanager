@@ -72,6 +72,7 @@
         </aside>
         <section class="reports-card">
           <div class="reports-header"><div><p class="eyebrow">GENERACIÓN DE INFORMES</p><h1 id="reportTitle">Informe ejecutivo</h1><p id="reportDescription">Configura el período para obtener una visión global de la evolución del proyecto.</p></div><span class="report-status">Próximamente</span></div>
+          <section class="report-instructions"><label for="reportInstructions">Instrucciones para el LLM <span>Se aplicarán a los informes generados</span></label><textarea id="reportInstructions" maxlength="6000" rows="4" placeholder="Por ejemplo: prioriza impacto para negocio, menciona riesgos y evita detalles técnicos innecesarios."></textarea><div><button id="saveReportInstructions" class="secondary" type="button">Guardar instrucciones</button><span id="reportInstructionsStatus" class="report-instructions-status" role="status"></span></div></section>
           <div class="report-content">
             <form id="executiveReportForm" class="report-form" novalidate>
               <div class="report-form-heading"><h2>Período del informe</h2><p>El rango inicial cubre el mes en curso.</p></div>
@@ -84,8 +85,9 @@
               <div class="report-form-heading"><h2>Período y responsable</h2><p>El rango inicial corresponde al día de hoy.</p></div>
               <label>Desde<input id="dailyReportFrom" type="date"></label>
               <label>Hasta<input id="dailyReportTo" type="date"></label>
-              <label class="report-user-field">Usuario <span>Opcional</span><input id="dailyReportUser" type="text" maxlength="200" placeholder="Nombre, correo o usuario de GitHub"></label>
-              <p class="report-note">La generación de informes estará disponible próximamente.</p>
+              <label class="report-user-field">Usuario<select id="dailyReportUser" required><option value="">Selecciona un usuario</option></select></label>
+              <p class="report-note">Se genera un análisis por cada tarea donde el usuario haya tenido actividad en el período.</p>
+              <button class="report-download" type="submit">Descargar informe PDF<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 19h14"/></svg></button><span id="dailyReportStatus" class="report-download-status" role="status"></span>
             </form>
           </div>
         </section>
