@@ -110,7 +110,7 @@ La recuperación inicial usa búsqueda léxica acotada. El director puede utiliz
 
 Las referencias recuperadas se validan contra los repositorios y proyectos seleccionados. Los datos de GitHub y Asana se consideran datos no confiables, nunca instrucciones para el modelo.
 
-Las consultas temporales se normalizan de forma determinista. Cuando se pide un subconjunto temático de todos los commits de un período, el sistema obtiene primero el conjunto completo y después delega su clasificación. La cobertura se controla mediante `requested`, `processed`, `missing` y `complete`.
+Las consultas temporales se normalizan de forma determinista. Las expresiones relativas como `hoy`, `ayer`, `mañana`, `pasado mañana`, `los últimos 7 días`, `las últimas dos semanas`, `esta semana`, `la semana pasada`, `este fin de semana`, `el próximo lunes`, `este mes`, `el mes pasado`, `este trimestre`, `el trimestre pasado`, `este año`, `el año pasado`, `desde principios de mes` y `hasta ayer` se amplían antes de llegar al modelo con sus fechas concretas; por ejemplo, `¿Qué he hecho hoy?` pasa a incluir `hoy (4 de agosto de 2026)`. Cuando se pide un subconjunto temático de todos los commits de un período, el sistema obtiene primero el conjunto completo y después delega su clasificación. La cobertura se controla mediante `requested`, `processed`, `missing` y `complete`.
 
 El **Modo depuración** muestra recuperación inicial, rondas de planificación, herramientas utilizadas, argumentos acotados, resultados resumidos, agentes delegados y duración de la generación. No muestra tokens, prompts completos ni cuerpos grandes de código.
 

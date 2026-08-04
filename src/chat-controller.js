@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { temporalScope } from './date-range.js';
+import { expandRelativeDates, temporalScope } from './date-range.js';
 import { readJsonBody, sendJson } from './http-utils.js';
 
 const isTemporalReport = (question, scope) => Boolean(scope && /\b(informe|cambi(?:o|ó|os|aron)|resumen|evoluci[oó]n|historial|report|changes?|changed|summary|evolution|history)\b/i.test(String(question)));
@@ -31,18 +31,19 @@ export function createChatController({ store, asanaStore, lmStudio, knowledgeToo
     const input = await readJsonBody(request);
     const question = String(input.question ?? '').trim();
     if (!question) return sendJson(response, 400, { error: 'Escribe una pregunta para el chat.' });
+    const preparedQuestion = expandRelativeDates(question);
     if (!config.model) return sendJson(response, 400, { error: 'Selecciona un modelo de LM Studio en Configuración antes de iniciar un chat.' });
     const debug = input.debug === true;
     const requestId = randomUUID();
     const mode = input.mode === 'executive' ? 'executive' : 'developer';
     const history = Array.isArray(input.history) ? input.history.slice(-12).map((item) => ({ role: item.role === 'assistant' ? 'assistant' : 'user', content: String(item.content ?? '').slice(0, 8000) })).filter((item) => item.content.trim()) : [];
-    const scope = temporalScope(question);
-    const agenticReport = isTemporalReport(question, scope);
-    const automaticClassification = agenticReport && needsTemporalClassification(question);
+    const scope = temporalScope(preparedQuestion);
+    const agenticReport = isTemporalReport(preparedQuestion, scope);
+    const automaticClassification = agenticReport && needsTemporalClassification(preparedQuestion);
     const temporalCandidates = agenticReport ? await store.rankAnalyses(config.repositories, { query: '', ...scope }) : null;
     const initialPage = agenticReport
       ? { results: temporalCandidates.slice(0, 50), totalMatches: temporalCandidates.length, hasMore: temporalCandidates.length > 50, nextOffset: temporalCandidates.length > 50 ? 50 : null }
-      : await store.searchAnalysesPage(config.repositories, scope ? { query: '', ...scope, limit: 50 } : { query: question, limit: 6 });
+        : await store.searchAnalysesPage(config.repositories, scope ? { query: '', ...scope, limit: 50 } : { query: preparedQuestion, limit: 6 });
     const initialContext = initialPage.results;
     const [total, asanaTasks] = await Promise.all([
       store.listAnalyses(config.repositories, Number.MAX_SAFE_INTEGER).then((items) => items.length),
@@ -50,7 +51,7 @@ export function createChatController({ store, asanaStore, lmStudio, knowledgeToo
     ]);
     const initialCoverage = { totalMatches: initialPage.totalMatches, returned: initialContext.length, hasMore: initialPage.hasMore, nextOffset: initialPage.nextOffset, temporalScope: scope };
     const repositoryNotes = Object.fromEntries(config.repositories.map((repository) => [repository, String(config.repositoryNotes?.[repository] ?? '').slice(0, 6_000)]).filter(([, note]) => note));
-    const messages = [{ role: 'system', content: ragSystemPrompt(mode, config.language, { total, asanaTasks, repositories: config.repositories, repositoryNotes, initialCoverage }, initialContext) }, ...history, { role: 'user', content: question }];
+    const messages = [{ role: 'system', content: ragSystemPrompt(mode, config.language, { total, asanaTasks, repositories: config.repositories, repositoryNotes, initialCoverage }, initialContext) }, ...history, { role: 'user', content: preparedQuestion }];
     response.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
     const event = (name, value) => response.write(`event: ${name}\ndata: ${JSON.stringify(value)}\n\n`);
     const trace = (stage, details = {}) => { if (debug) event('debug', { ...debugValue(details), requestId, timestamp: new Date().toISOString(), stage }); };
@@ -68,7 +69,7 @@ export function createChatController({ store, asanaStore, lmStudio, knowledgeToo
           activity(details.stage, { message: details.stage === 'agent_started' ? `El agente clasificará ${details.commits} commits.` : details.stage === 'agent_completed' ? 'El agente clasificador ha terminado.' : `Agente clasificador: ${details.stage}.`, ...activityDetails });
           trace('agent_activity', details);
         };
-        delegatedReport = await classifyCommitSet(question, temporalCandidates, agentActivity);
+        delegatedReport = await classifyCommitSet(preparedQuestion, temporalCandidates, agentActivity);
         trace('automatic_delegation_completed', { coverage: delegatedReport.coverage, relevant: delegatedReport.relevant.map((item) => `${item.repository}@${item.sha}`), excluded: delegatedReport.excluded.map((item) => `${item.repository}@${item.sha}`) });
         messages.push({ role: 'system', content: `The orchestrator delegated exhaustive classification for this report. Treat this structured result as the coverage ledger and evidence selected by the worker. If coverage.complete is false, explicitly disclose incompleteness. Do not include excluded commits as matching the requested scope.\n\nDelegated result:\n${JSON.stringify(delegatedReport)}` });
       }
@@ -135,4 +136,3 @@ export function createChatController({ store, asanaStore, lmStudio, knowledgeToo
     return response.end();
   };
 }
-
