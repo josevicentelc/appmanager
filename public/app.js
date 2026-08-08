@@ -28,12 +28,36 @@ function formatAssistantMessage(value) {
     .replace(/https:\/\/app\.asana\.com\/api\/attachments\/\d{1,30}\/\d{1,30}\/(\d{1,30})(?:[?#][^\s)]*)?/g, '/api/asana/attachments/by-id/$1');
   const asanaTaskLinks = (text) => text.replace(/\[asana:(\d{1,30})@(\d{1,30})\]/g, (_match, projectGid, taskGid) => `<a class="asana-task-link" href="https://app.asana.com/0/${projectGid}/${taskGid}" target="_blank" rel="noopener noreferrer">[asana:${projectGid}@${taskGid}]</a>`);
   const inline = (text) => asanaTaskLinks(escapeHtml(localAttachmentUrl(text))).replace(/!\[([^\]]*)\]\((\/api\/asana\/attachments\/(?:by-id\/)?\d{1,30}(?:\/\d{1,30}\/\d{1,30})?)\)/g, '<img class="asana-attachment-image" src="$2" alt="$1" loading="lazy">').replace(/\[([^\]]+)\]\((\/api\/asana\/attachments\/(?:by-id\/)?\d{1,30}(?:\/\d{1,30}\/\d{1,30})?)\)/g, '<a class="asana-attachment-link" href="$2" target="_blank" rel="noopener noreferrer">$1</a>').replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/`([^`\n]+)`/g, '<code>$1</code>');
+  const tableCells = (line) => {
+    const trimmed = String(line ?? '').trim();
+    if (!/^\|.*\|$/.test(trimmed)) return null;
+    return trimmed.slice(1, -1).split('|').map((cell) => cell.trim());
+  };
+  const isTableSeparator = (cells) => Array.isArray(cells) && cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
   return value.split('```').map((segment, index) => {
     if (index % 2) return `<pre><code>${escapeHtml(segment.replace(/^[\w+-]+\r?\n/, ''))}</code></pre>`;
     const output = [];
     let list = null;
     const closeList = () => { if (list) { output.push(`</${list}>`); list = null; } };
-    for (const line of segment.split(/\r?\n/)) {
+    const lines = segment.split(/\r?\n/);
+    for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+      const line = lines[lineIndex];
+      const headerCells = tableCells(line);
+      const separatorCells = tableCells(lines[lineIndex + 1]);
+      if (headerCells && separatorCells && headerCells.length === separatorCells.length && isTableSeparator(separatorCells)) {
+        closeList();
+        const rows = [];
+        lineIndex += 2;
+        while (lineIndex < lines.length) {
+          const cells = tableCells(lines[lineIndex]);
+          if (!cells || cells.length !== headerCells.length) break;
+          rows.push(cells);
+          lineIndex += 1;
+        }
+        lineIndex -= 1;
+        output.push(`<div class="markdown-table-wrap"><table class="markdown-table"><thead><tr>${headerCells.map((cell) => `<th>${inline(cell)}</th>`).join('')}</tr></thead><tbody>${rows.map((cells) => `<tr>${cells.map((cell) => `<td>${inline(cell)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
+        continue;
+      }
       const bullet = line.match(/^\s*[-*]\s+(.+)/);
       const numbered = line.match(/^\s*\d+\.\s+(.+)/);
       if (bullet || numbered) {
