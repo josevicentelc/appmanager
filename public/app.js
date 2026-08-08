@@ -26,7 +26,8 @@ function formatAssistantMessage(value) {
   const localAttachmentUrl = (url) => url
     .replace(/https:\/\/storage\.googleapis\.com\/asana-attachments\/\d{1,30}\/(\d{1,30})(?:[?#][^\s)]*)?/g, '/api/asana/attachments/by-id/$1')
     .replace(/https:\/\/app\.asana\.com\/api\/attachments\/\d{1,30}\/\d{1,30}\/(\d{1,30})(?:[?#][^\s)]*)?/g, '/api/asana/attachments/by-id/$1');
-  const inline = (text) => escapeHtml(localAttachmentUrl(text)).replace(/!\[([^\]]*)\]\((\/api\/asana\/attachments\/(?:by-id\/)?\d{1,30}(?:\/\d{1,30}\/\d{1,30})?)\)/g, '<img class="asana-attachment-image" src="$2" alt="$1" loading="lazy">').replace(/\[([^\]]+)\]\((\/api\/asana\/attachments\/(?:by-id\/)?\d{1,30}(?:\/\d{1,30}\/\d{1,30})?)\)/g, '<a class="asana-attachment-link" href="$2" target="_blank" rel="noopener noreferrer">$1</a>').replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/`([^`\n]+)`/g, '<code>$1</code>');
+  const asanaTaskLinks = (text) => text.replace(/\[asana:(\d{1,30})@(\d{1,30})\]/g, (_match, projectGid, taskGid) => `<a class="asana-task-link" href="https://app.asana.com/0/${projectGid}/${taskGid}" target="_blank" rel="noopener noreferrer">[asana:${projectGid}@${taskGid}]</a>`);
+  const inline = (text) => asanaTaskLinks(escapeHtml(localAttachmentUrl(text))).replace(/!\[([^\]]*)\]\((\/api\/asana\/attachments\/(?:by-id\/)?\d{1,30}(?:\/\d{1,30}\/\d{1,30})?)\)/g, '<img class="asana-attachment-image" src="$2" alt="$1" loading="lazy">').replace(/\[([^\]]+)\]\((\/api\/asana\/attachments\/(?:by-id\/)?\d{1,30}(?:\/\d{1,30}\/\d{1,30})?)\)/g, '<a class="asana-attachment-link" href="$2" target="_blank" rel="noopener noreferrer">$1</a>').replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/`([^`\n]+)`/g, '<code>$1</code>');
   return value.split('```').map((segment, index) => {
     if (index % 2) return `<pre><code>${escapeHtml(segment.replace(/^[\w+-]+\r?\n/, ''))}</code></pre>`;
     const output = [];

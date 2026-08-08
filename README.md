@@ -103,6 +103,7 @@ La recuperación inicial usa búsqueda léxica acotada. El director puede utiliz
 - buscar y leer análisis de commits;
 - obtener autores desde metadatos originales de GitHub;
 - localizar tareas y detalles de Asana;
+- buscar actividad de Asana por la fecha en que ocurriÃ³, incluidos comentarios y cambios de estado;
 - buscar hunks dentro de diffs;
 - leer fragmentos paginados de diffs o archivos;
 - mostrar adjuntos de Asana almacenados localmente;

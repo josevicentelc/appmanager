@@ -93,6 +93,38 @@ export class AsanaStore {
     }
     return activities.sort((left, right) => String(left.events[0]?.date ?? '').localeCompare(String(right.events[0]?.date ?? '')));
   }
+  /**
+   * Finds task activity by the date of the Asana story, rather than the task
+   * creation date. This is the temporal counterpart to searchAnalyses().
+   */
+  async searchStoryActivity(projectGids, { from, to, query = '', author = '', projectGid = '', limit = 20 } = {}) {
+    const terms = [...new Set(words(query))];
+    const selectedAuthor = String(author).trim().toLocaleLowerCase();
+    const results = [];
+    for (const candidateProjectGid of projectGids) {
+      if (projectGid && String(projectGid) !== String(candidateProjectGid)) continue;
+      for (const taskGid of await this.listTaskGids(candidateProjectGid)) {
+        const [task, analysis, stories] = await Promise.all([this.getTaskRaw(candidateProjectGid, taskGid), this.getTaskAnalysis(candidateProjectGid, taskGid), this.getTaskStories(candidateProjectGid, taskGid)]);
+        const events = stories
+          .filter((story) => !from || String(story.created_at ?? '') >= `${from}T00:00:00.000Z`)
+          .filter((story) => !to || String(story.created_at ?? '') <= `${to}T23:59:59.999Z`)
+          .filter((story) => !selectedAuthor || String(story.created_by?.name ?? '').trim().toLocaleLowerCase() === selectedAuthor)
+          .map((story) => ({ gid: story.gid ?? null, date: story.created_at, author: story.created_by?.name ?? null, type: story.type ?? null, resourceSubtype: story.resource_subtype ?? null, text: story.text ?? null, oldValue: story.old_value ?? null, newValue: story.new_value ?? null }));
+        const searchable = [task?.name, analysis?.briefDescription, analysis?.objective, ...events.map((event) => event.text)].join(' ').toLocaleLowerCase();
+        if (events.length && (!terms.length || terms.every((term) => searchable.includes(term)))) {
+          results.push({
+            source: `asana:${candidateProjectGid}@${taskGid}`,
+            projectGid: String(candidateProjectGid),
+            taskGid: String(taskGid),
+            task: { name: task?.name ?? analysis?.task?.name ?? taskGid, permalinkUrl: task?.permalink_url ?? analysis?.task?.permalinkUrl ?? null },
+            briefDescription: analysis?.briefDescription ?? analysis?.objective ?? task?.notes ?? null,
+            events
+          });
+        }
+      }
+    }
+    return results.sort((left, right) => String(left.events[0]?.date ?? '').localeCompare(String(right.events[0]?.date ?? ''))).slice(0, Math.max(1, Math.min(Number(limit) || 20, 50)));
+  }
   async searchAnalyses(projectGids, { query = '', projectGid = '', createdSince = '', createdUntil = '', completed, limit = 12 } = {}) {
     const terms = [...new Set(words(query))];
     return (await this.listAnalyses(projectGids, { createdSince, createdUntil })).filter((analysis) => !projectGid || analysis.project?.gid === projectGid)

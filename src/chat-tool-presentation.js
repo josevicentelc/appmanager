@@ -14,7 +14,7 @@ export function createToolPresentation(toolArguments) {
   
   function summarizeToolResult(name, result) {
     if (result?.error) return { error: result.error };
-    if (name === 'get_knowledge') return { returned: result.returned, totalCommitMatches: result.totalCommitMatches, results: (result.results ?? []).map((item) => ({ kind: item.kind, source: item.source, id: item.sha ?? item.taskGid, date: item.date, title: item.title })) };
+    if (name === 'get_knowledge') return { returned: result.returned, totalCommitMatches: result.totalCommitMatches, totalAsanaTaskMatches: result.totalAsanaTaskMatches, totalAsanaActivityMatches: result.totalAsanaActivityMatches, results: (result.results ?? []).map((item) => ({ kind: item.kind, source: item.source, id: item.sha ?? item.taskGid, date: item.date, title: item.title, events: item.events?.length })) };
     if (name === 'search_commit_knowledge') return {
       resultCount: result.results?.length ?? 0, totalMatches: result.totalMatches, offset: result.offset,
       hasMore: result.hasMore, nextOffset: result.nextOffset,
@@ -36,6 +36,7 @@ export function createToolPresentation(toolArguments) {
     };
     if (name === 'read_diff_hunk' || name === 'read_file_at_commit') return { source: result.source, startLine: result.startLine, endLine: result.endLine, totalLines: result.totalLines, characters: result.content?.length ?? 0, truncated: result.truncated, nextStartLine: result.nextStartLine };
     if (name === 'search_asana_tasks') return { resultCount: result.results?.length ?? 0, results: (result.results ?? []).map((item) => ({ source: item.source, task: item.task?.name, completed: item.task?.completed, project: item.project?.name, tags: item.tags })) };
+    if (name === 'search_asana_activity') return { resultCount: result.results?.length ?? 0, results: (result.results ?? []).map((item) => ({ source: item.source, task: item.task?.name, events: item.events?.length ?? 0, firstActivity: item.events?.[0]?.date })) };
     if (name === 'get_asana_task_knowledge') return { source: result.source, found: Boolean(result.analysis), task: result.analysis?.task?.name, stories: result.raw?.stories?.length ?? 0, attachments: result.raw?.attachments?.length ?? 0 };
     if (name === 'show_asana_attachment') return result.attachment ? { attachment: { name: result.attachment.name, contentType: result.attachment.contentType, inline: result.attachment.inline } } : result;
     return debugValue(result);
@@ -52,6 +53,7 @@ export function createToolPresentation(toolArguments) {
       read_diff_hunk: ['Leyendo un fragmento del diff…', 'Fragmento del diff recuperado.'],
       read_file_at_commit: ['Leyendo el archivo en el commit…', 'Contenido del archivo recuperado.'],
       search_asana_tasks: ['Buscando en las tareas de Asana…', 'Búsqueda de tareas de Asana completada.'],
+      search_asana_activity: ['Buscando actividad de Asana por fecha…', 'Búsqueda de actividad de Asana completada.'],
       get_asana_task_knowledge: ['Leyendo los detalles y adjuntos de la tarea de Asana…', 'Detalles de la tarea de Asana recuperados.'],
       show_asana_attachment: ['Preparando el adjunto de Asana…', 'Adjunto de Asana mostrado en el chat.'],
       delegate_commit_classification: ['Delegando la clasificación de los commits…', 'Clasificación de commits completada.']
@@ -82,6 +84,7 @@ export function createToolPresentation(toolArguments) {
       read_diff_hunk: `Leyendo el hunk ${concise(input.hunkId)} de ${concise(input.path)}…`,
       read_file_at_commit: `Leyendo ${concise(input.path)} (líneas ${input.startLine || 1}–${input.endLine || '?'})…`,
       search_asana_tasks: `Buscando en las tareas de Asana${querySuffix}${scope()}${typeof input.completed === 'boolean' ? input.completed ? ', solo completadas' : ', solo pendientes' : ''}…`,
+      search_asana_activity: `Buscando actividad de Asana${querySuffix}${input.author ? ` del usuario ${concise(input.author)}` : ''}${scope()}…`,
       get_asana_task_knowledge: `Leyendo los detalles de la tarea de Asana ${concise(input.taskGid)}…`,
       show_asana_attachment: `Preparando el adjunto «${concise(input.attachmentName)}» de Asana…`,
       delegate_commit_classification: `Clasificando ${Array.isArray(input.commits) ? input.commits.length : 'los'} commits por tema…`
@@ -92,4 +95,3 @@ export function createToolPresentation(toolArguments) {
   
   return { debugValue, summarizeToolResult, detailedToolActivityMessage };
 }
-

@@ -40,23 +40,26 @@ export function createKnowledgeTools({ store, asanaStore, commitClassifier, getC
     if (call.function?.name === 'get_knowledge') {
       const date = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value ?? '')) ? String(value) : '';
       const query = String(input.query ?? '').trim().slice(0, 300);
-      const kinds = new Set((Array.isArray(input.kinds) ? input.kinds : []).filter((kind) => kind === 'commit' || kind === 'asana_task'));
+      const kinds = new Set((Array.isArray(input.kinds) ? input.kinds : []).filter((kind) => kind === 'commit' || kind === 'asana_task' || kind === 'asana_activity'));
       const includeCommits = !kinds.size || kinds.has('commit');
       const includeTasks = !kinds.size || kinds.has('asana_task');
+      const includeAsanaActivity = !kinds.size || kinds.has('asana_activity');
       const repository = repositories.includes(input.repository) ? input.repository : '';
       const projectGid = input.projectGid && selectedAsanaProject(input.projectGid) ? String(input.projectGid) : '';
       if (input.repository && !repository) return { error: 'Requested repository is not selected.' };
       if (input.projectGid && !projectGid) return { error: 'Requested Asana project is not selected.' };
       const limit = Math.max(1, Math.min(Number(input.limit) || 20, 50));
-      const [commitPage, taskMatches] = await Promise.all([
+      const [commitPage, taskMatches, activityMatches] = await Promise.all([
         includeCommits ? store.searchAnalysesPage(repositories, { query, repository, from: date(input.from), to: date(input.to), limit }) : Promise.resolve({ results: [], totalMatches: 0 }),
-        includeTasks ? asanaStore.searchAnalyses(getConfig().asanaProjects ?? [], { query, projectGid, createdSince: date(input.from) || getConfig().asanaImportSince, createdUntil: date(input.to), limit }) : Promise.resolve([])
+        includeTasks ? asanaStore.searchAnalyses(getConfig().asanaProjects ?? [], { query, projectGid, createdSince: date(input.from) || getConfig().asanaImportSince, createdUntil: date(input.to), limit }) : Promise.resolve([]),
+        includeAsanaActivity ? asanaStore.searchStoryActivity(getConfig().asanaProjects ?? [], { query, projectGid, from: date(input.from), to: date(input.to), limit }) : Promise.resolve([])
       ]);
       const results = [
         ...commitPage.results.map((item) => ({ kind: 'commit', source: item.source, repository: item.repository, sha: item.sha, date: item.commitDate, description: item.briefDescription || item.changeSummary || item.originalMessage, title: item.originalMessage, tags: item.tags })),
-        ...taskMatches.map((item) => ({ kind: 'asana_task', source: item.source, projectGid: item.project?.gid, project: item.project?.name, taskGid: item.task?.gid, date: item.task?.createdAt, title: item.task?.name, description: item.briefDescription, tags: item.tags, completed: item.task?.completed }))
+        ...taskMatches.map((item) => ({ kind: 'asana_task', source: item.source, projectGid: item.project?.gid, project: item.project?.name, taskGid: item.task?.gid, date: item.task?.createdAt, title: item.task?.name, description: item.briefDescription, tags: item.tags, completed: item.task?.completed })),
+        ...activityMatches.map((item) => ({ kind: 'asana_activity', source: item.source, projectGid: item.projectGid, taskGid: item.taskGid, date: item.events[0]?.date ?? null, title: item.task?.name, description: item.briefDescription, events: item.events }))
       ].sort((a, b) => String(b.date ?? '').localeCompare(String(a.date ?? ''))).slice(0, limit);
-      return { results, totalCommitMatches: commitPage.totalMatches, returned: results.length };
+      return { results, totalCommitMatches: commitPage.totalMatches, totalAsanaTaskMatches: taskMatches.length, totalAsanaActivityMatches: activityMatches.length, returned: results.length };
     }
     if (call.function?.name === 'search_commit_knowledge') {
       const repository = repositories.includes(input.repository) ? input.repository : '';
@@ -161,6 +164,14 @@ export function createKnowledgeTools({ store, asanaStore, commitClassifier, getC
       const projectGid = input.projectGid && selectedAsanaProject(input.projectGid) ? String(input.projectGid) : '';
       if (input.projectGid && !projectGid) return { error: 'Requested Asana project is not selected.' };
       return { results: await asanaStore.searchAnalyses(getConfig().asanaProjects ?? [], { query: String(input.query ?? '').slice(0, 300), projectGid, createdSince: getConfig().asanaImportSince, completed: typeof input.completed === 'boolean' ? input.completed : undefined, limit: Math.max(1, Math.min(Number(input.limit) || 12, 30)) }) };
+    }
+    if (call.function?.name === 'search_asana_activity') {
+      const date = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value ?? '')) ? String(value) : '';
+      const from = date(input.from); const to = date(input.to);
+      const projectGid = input.projectGid && selectedAsanaProject(input.projectGid) ? String(input.projectGid) : '';
+      if (!from || !to || from > to) return { error: 'A valid activity date range is required.' };
+      if (input.projectGid && !projectGid) return { error: 'Requested Asana project is not selected.' };
+      return { results: await asanaStore.searchStoryActivity(getConfig().asanaProjects ?? [], { from, to, projectGid, query: String(input.query ?? '').slice(0, 300), author: String(input.author ?? '').slice(0, 200), limit: Math.max(1, Math.min(Number(input.limit) || 20, 50)) }) };
     }
     if (call.function?.name === 'get_asana_task_knowledge') {
       const taskGid = String(input.taskGid ?? '');
